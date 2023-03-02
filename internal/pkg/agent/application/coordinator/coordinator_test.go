@@ -7,18 +7,27 @@ package coordinator
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elastic/elastic-agent-libs/logp"
 	"github.com/elastic/elastic-agent/internal/pkg/agent/application/info"
 	"github.com/elastic/elastic-agent/internal/pkg/agent/transpiler"
+	"github.com/elastic/elastic-agent/internal/pkg/diagnostics"
 	"github.com/elastic/elastic-agent/pkg/component"
 	"github.com/elastic/elastic-agent/pkg/component/runtime"
 	"github.com/elastic/elastic-agent/pkg/core/logger"
 )
+
+var expectedDiagnosticHooks map[string]string = map[string]string{
+	"pre-config":      "pre-config.yaml",
+	"variables":       "variables.yaml",
+	"computed-config": "computed-config.yaml",
+	"components":      "components.yaml",
+	"state":           "state.yaml",
+}
 
 func TestCoordinatorDiagnosticHooks(t *testing.T) {
 
@@ -33,6 +42,7 @@ func TestCoordinatorDiagnosticHooks(t *testing.T) {
 	mockRuntimeMgr.EXPECT().Errors().Return(runtimeErrChan).AnyTimes()
 	mockRuntimeMgr.EXPECT().SubscribeAll(gomock.Any()).Return(new(runtime.SubscriptionAll)).AnyTimes()
 	mockRuntimeMgr.EXPECT().Run(gomock.Any()).AnyTimes()
+	mockRuntimeMgr.EXPECT().State().Return([]runtime.ComponentComponentState{}).Times(1)
 
 	mockConfigMgr := NewMockConfigManager(mockCtrl)
 	configErrChan := make(chan error)
@@ -71,6 +81,22 @@ func TestCoordinatorDiagnosticHooks(t *testing.T) {
 
 	go sut.Run(ctx)
 
-	time.Sleep(5 * time.Second)
+	diagHooks := sut.DiagnosticHooks()
+	t.Logf("Received diagnostics: %+v", diagHooks)
+	assert.NotEmpty(t, diagHooks)
 
+	hooksMap := map[string]diagnostics.Hook{}
+	for i, h := range diagHooks {
+		hooksMap[h.Name] = diagHooks[i]
+	}
+
+	for hookName, diagFileName := range expectedDiagnosticHooks {
+		contained := assert.Contains(t, hooksMap, hookName)
+		if contained {
+			hook := hooksMap[hookName]
+			assert.Equal(t, diagFileName, hook.Filename)
+			hookResult := hook.Hook(ctx)
+			t.Logf("Result of hook %v:\n%s\n", hook.Name, hookResult)
+		}
+	}
 }
