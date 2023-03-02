@@ -6,20 +6,34 @@ package coordinator
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elastic/elastic-agent-client/v7/pkg/client"
+	"github.com/elastic/elastic-agent-client/v7/pkg/proto"
 	"github.com/elastic/elastic-agent-libs/logp"
+	"github.com/elastic/elastic-agent-libs/mapstr"
 	"github.com/elastic/elastic-agent/internal/pkg/agent/application/info"
 	"github.com/elastic/elastic-agent/internal/pkg/agent/transpiler"
+	"github.com/elastic/elastic-agent/internal/pkg/config"
 	"github.com/elastic/elastic-agent/internal/pkg/diagnostics"
 	"github.com/elastic/elastic-agent/pkg/component"
 	"github.com/elastic/elastic-agent/pkg/component/runtime"
 	"github.com/elastic/elastic-agent/pkg/core/logger"
 )
+
+//go:generate mockgen -source=coordinator.go -package coordinator -destination mocks_test.go
+//go:generate mockgen -source ../../../capabilities/capabilities.go -package coordinator -destination mocks_cap_test.go
+//go:generate mockgen -source ../../../core/composable/providers.go -package coordinator -destination mocks_var_providers_test.go
 
 var expectedDiagnosticHooks map[string]string = map[string]string{
 	"pre-config":      "pre-config.yaml",
@@ -31,55 +45,121 @@ var expectedDiagnosticHooks map[string]string = map[string]string{
 
 func TestCoordinatorDiagnosticHooks(t *testing.T) {
 
-	log, err := logger.New("test-coordinator", false)
-	require.NoError(t, err)
+	helper := newCoordinatorTestHelper(t, &info.AgentInfo{}, component.RuntimeSpecs{}, false)
 
-	mockCtrl := gomock.NewController(t)
-	defer mockCtrl.Finish()
+	//FIXME I cannot customize what is returned in SubscriptionAll object since it's defined as a struct and all the
+	//constructors and fields are private -> the RuntimeManager interface definition should define an interface as
+	//return type on the coordinator side or the returned struct should be plain data object with all the fields
+	//accessible by anyone
+	subscriptionAll := new(runtime.SubscriptionAll)
+	helper.runtimeManager.EXPECT().SubscribeAll(gomock.Any()).Return(subscriptionAll).AnyTimes()
+	helper.runtimeManager.EXPECT().Update(gomock.Any()).Return(nil)
+	helper.runtimeManager.EXPECT().State().Return([]runtime.ComponentComponentState{
+		{
+			Component: component.Component{
+				ID: "mock_component_1",
+				Units: []component.Unit{
+					{
+						ID:       "mock_input_unit",
+						Type:     client.UnitTypeInput,
+						LogLevel: client.UnitLogLevelInfo,
+						Config:   &proto.UnitExpectedConfig{
+							//TODO
+						},
+					},
+				},
+			},
+			State: runtime.ComponentState{
+				State: client.UnitStateHealthy,
+				VersionInfo: runtime.ComponentVersionInfo{
+					Name:    "shiny mock component",
+					Version: "latest, obvs :D",
+				},
+			},
+		},
+	}).AnyTimes()
 
-	mockRuntimeMgr := NewMockRuntimeManager(mockCtrl)
-	runtimeErrChan := make(chan error)
-	mockRuntimeMgr.EXPECT().Errors().Return(runtimeErrChan).AnyTimes()
-	mockRuntimeMgr.EXPECT().SubscribeAll(gomock.Any()).Return(new(runtime.SubscriptionAll)).AnyTimes()
-	mockRuntimeMgr.EXPECT().Run(gomock.Any()).AnyTimes()
-	mockRuntimeMgr.EXPECT().State().Return([]runtime.ComponentComponentState{}).Times(1)
-
-	mockConfigMgr := NewMockConfigManager(mockCtrl)
-	configErrChan := make(chan error)
-	mockConfigMgr.EXPECT().Errors().Return(configErrChan).AnyTimes()
-	actionErrorChan := make(chan error)
-	mockConfigMgr.EXPECT().ActionErrors().Return(actionErrorChan).AnyTimes()
-	configChangeChan := make(chan ConfigChange)
-	mockConfigMgr.EXPECT().Watch().Return(configChangeChan).AnyTimes()
-	mockConfigMgr.EXPECT().Run(gomock.Any()).AnyTimes()
-
-	mockVarsMgr := NewMockVarsManager(mockCtrl)
-	varsErrChan := make(chan error)
-	mockVarsMgr.EXPECT().Errors().Return(varsErrChan).AnyTimes()
-	varsChan := make(chan []*transpiler.Vars)
-	mockVarsMgr.EXPECT().Watch().Return(varsChan).AnyTimes()
-	mockVarsMgr.EXPECT().Run(gomock.Any()).AnyTimes()
-
-	sut := New(
-		log,
-		logp.DebugLevel,
-		&info.AgentInfo{},
-		component.RuntimeSpecs{},
-		NewMockReExecManager(mockCtrl),
-		NewMockUpgradeManager(mockCtrl),
-		mockRuntimeMgr,
-		mockConfigMgr,
-		mockVarsMgr,
-		NewMockCapability(mockCtrl),
-		NewMockMonitorManager(mockCtrl),
-		false,
-	)
+	sut := helper.coordinator
 
 	ctx, cancelFunc := context.WithCancel(context.Background())
 
-	defer cancelFunc()
+	wg := new(sync.WaitGroup)
+	defer func() {
+		cancelFunc()
+		wg.Wait()
+	}()
 
-	go sut.Run(ctx)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		coordErr := sut.Run(ctx)
+		t.Logf("coordinator exited with error %v", coordErr)
+	}()
+
+	//FIXME: the coordinator never leaves the STARTING state...
+	// assert.Eventually(t, func() bool { return sut.State(true).State != cproto.State_STARTING }, 1*time.Second, 50*time.Millisecond)
+
+	t.Logf("Agent state: %s", sut.State(true).State)
+
+	// Inject initial configuration - after starting coordinator
+	configBytes, err := os.ReadFile("./testdata/simple_config/elastic-agent.yml")
+	require.NoError(t, err)
+
+	initialConf := config.MustNewConfigFrom(configBytes)
+
+	var configAcked bool
+
+	initialConfChange := NewMockConfigChange(helper.mockCtrl)
+	initialConfChange.EXPECT().Config().Return(initialConf).AnyTimes()
+	initialConfChange.EXPECT().Ack().DoAndReturn(func() error { configAcked = true; return nil }).Times(1)
+
+	select {
+	case helper.configChangeChannel <- initialConfChange:
+		t.Log("Initial config injected")
+	case <-time.NewTimer(100 * time.Millisecond).C:
+		t.Fatalf("Timeout writing initial config")
+	}
+
+	//Provide vars
+	processors := transpiler.Processors{
+		{
+			"add_fields": map[string]interface{}{
+				"dynamic": "added",
+			},
+		},
+	}
+	fetchContextProvider := NewMockFetchContextProvider(helper.mockCtrl)
+	fetchContextProviders := mapstr.M{
+		"kubernetes_secrets": fetchContextProvider,
+	}
+	vars, err := transpiler.NewVarsWithProcessors(
+		"id",
+		map[string]interface{}{
+			"host": map[string]interface{}{"platform": "linux"},
+			"dynamic": map[string]interface{}{
+				"key1": "dynamic1",
+				"list": []string{
+					"array1",
+					"array2",
+				},
+				"dict": map[string]string{
+					"key1": "value1",
+					"key2": "value2",
+				},
+			},
+		},
+		"dynamic",
+		processors,
+		fetchContextProviders)
+	require.NoError(t, err)
+	select {
+	case helper.varsChannel <- []*transpiler.Vars{vars}:
+		t.Log("Vars injected")
+	case <-time.NewTimer(100 * time.Millisecond).C:
+		t.Fatalf("Timeout writing vars")
+	}
+
+	assert.Eventually(t, func() bool { return configAcked }, 1*time.Second, 50*time.Millisecond, "Initial config was not acked.")
 
 	diagHooks := sut.DiagnosticHooks()
 	t.Logf("Received diagnostics: %+v", diagHooks)
@@ -96,7 +176,125 @@ func TestCoordinatorDiagnosticHooks(t *testing.T) {
 			hook := hooksMap[hookName]
 			assert.Equal(t, diagFileName, hook.Filename)
 			hookResult := hook.Hook(ctx)
-			t.Logf("Result of hook %v:\n%s\n", hook.Name, hookResult)
+			stringHookResult := sanitizeHookResult(t, hookResult)
+			// The output of hooks is VERY verbose even for simple configs but useful for debugging
+			t.Logf("Hook %s result: 👇\n------ START ------\n%s\n------ END ------", hook.Name, stringHookResult)
+			expectedbytes, err := os.ReadFile(fmt.Sprintf("./testdata/simple_config/expected/%s", hook.Filename))
+			if assert.NoError(t, err) {
+				assert.YAMLEqf(t, string(expectedbytes), stringHookResult, "Unexpected YAML content for file %s", hook.Filename)
+			}
 		}
 	}
+}
+
+func sanitizeHookResult(t *testing.T, rawBytes []byte) string {
+	const agentRunDir string = "<AgentRunDir>"
+
+	//substitute current running dir with a placeholder
+	testDir := path.Dir(os.Args[0])
+	t.Logf("Replacing test dir %s with %s", testDir, agentRunDir)
+	return strings.ReplaceAll(string(rawBytes), testDir, agentRunDir)
+}
+
+type coordinatorTestHelper struct {
+	coordinator *Coordinator
+
+	runtimeManager      *MockRuntimeManager
+	runtimeErrorChannel chan error
+
+	configManager       *MockConfigManager
+	configChangeChannel chan ConfigChange
+	configErrorChannel  chan error
+	actionErrorChannel  chan error
+
+	varsManager      *MockVarsManager
+	varsChannel      chan []*transpiler.Vars
+	varsErrorChannel chan error
+
+	capability     *MockCapability
+	upgradeManager *MockUpgradeManager
+	reExecManager  *MockReExecManager
+	monitorManager *MockMonitorManager
+	mockCtrl       *gomock.Controller
+}
+
+func newCoordinatorTestHelper(t *testing.T, agentInfo *info.AgentInfo, specs component.RuntimeSpecs, isManaged bool) *coordinatorTestHelper {
+
+	helper := new(coordinatorTestHelper)
+
+	mockCtrl := gomock.NewController(t)
+	helper.mockCtrl = mockCtrl
+
+	// Runtime manager basic wiring
+	mockRuntimeMgr := NewMockRuntimeManager(mockCtrl)
+	runtimeErrChan := make(chan error)
+	mockRuntimeMgr.EXPECT().Errors().Return(runtimeErrChan).AnyTimes()
+	mockRuntimeMgr.EXPECT().Run(gomock.Any()).DoAndReturn(func(_ctx context.Context) error { <-_ctx.Done(); return _ctx.Err() }).Times(1)
+	helper.runtimeManager = mockRuntimeMgr
+	helper.runtimeErrorChannel = runtimeErrChan
+
+	// Config manager basic wiring
+	mockConfigMgr := NewMockConfigManager(mockCtrl)
+	configErrChan := make(chan error)
+	mockConfigMgr.EXPECT().Errors().Return(configErrChan).AnyTimes()
+	actionErrorChan := make(chan error)
+	mockConfigMgr.EXPECT().ActionErrors().Return(actionErrorChan).AnyTimes()
+	configChangeChan := make(chan ConfigChange)
+	mockConfigMgr.EXPECT().Watch().Return(configChangeChan).AnyTimes()
+	mockConfigMgr.EXPECT().Run(gomock.Any()).DoAndReturn(func(_ctx context.Context) error { <-_ctx.Done(); return _ctx.Err() }).Times(1)
+	helper.configManager = mockConfigMgr
+	helper.configErrorChannel = configErrChan
+	helper.actionErrorChannel = actionErrorChan
+	helper.configChangeChannel = configChangeChan
+
+	//Variables manager basic wiring
+	mockVarsMgr := NewMockVarsManager(mockCtrl)
+	varsErrChan := make(chan error)
+	mockVarsMgr.EXPECT().Errors().Return(varsErrChan).AnyTimes()
+	varsChan := make(chan []*transpiler.Vars)
+	mockVarsMgr.EXPECT().Watch().Return(varsChan).AnyTimes()
+	mockVarsMgr.EXPECT().Run(gomock.Any()).DoAndReturn(func(_ctx context.Context) error { <-_ctx.Done(); return _ctx.Err() }).Times(1)
+	helper.varsManager = mockVarsMgr
+	helper.varsChannel = varsChan
+	helper.varsErrorChannel = varsErrChan
+
+	//Capability basic wiring
+	mockCapability := NewMockCapability(mockCtrl)
+	mockCapability.EXPECT().Apply(gomock.Any()).DoAndReturn(func(in any) (interface{}, error) { return in, nil }).AnyTimes()
+	helper.capability = mockCapability
+
+	// Upgrade manager
+	mockUpgradeMgr := NewMockUpgradeManager(mockCtrl)
+	mockUpgradeMgr.EXPECT().Reload(gomock.Any()).Return(nil).AnyTimes()
+	// mockUpgradeMgr.EXPECT().Upgradeable().Return(false)
+	helper.upgradeManager = mockUpgradeMgr
+
+	//ReExec manager
+	helper.reExecManager = NewMockReExecManager(mockCtrl)
+
+	//Monitor manager
+	mockMonitorMgr := NewMockMonitorManager(mockCtrl)
+	mockMonitorMgr.EXPECT().Reload(gomock.Any()).Return(nil).AnyTimes()
+	mockMonitorMgr.EXPECT().Enabled().Return(false).AnyTimes()
+	helper.monitorManager = mockMonitorMgr
+
+	log, err := logger.New("coordinator-test-harness", false)
+	require.NoError(t, err)
+
+	helper.coordinator = New(
+		log,
+		logp.InfoLevel,
+		agentInfo,
+		specs,
+		helper.reExecManager,
+		helper.upgradeManager,
+		helper.runtimeManager,
+		helper.configManager,
+		helper.varsManager,
+		helper.capability,
+		helper.monitorManager,
+		isManaged,
+	)
+
+	return helper
 }
