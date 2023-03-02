@@ -33,6 +33,9 @@ import (
 	"github.com/elastic/elastic-agent/pkg/core/logger"
 )
 
+//go:generate mockgen -source=coordinator.go -package coordinator -destination mocks_test.go
+//go:generate mockgen  -source ../../../capabilities/capabilities.go -package coordinator -destination mocks_cap_test.go
+
 var (
 	// ErrNotUpgradable error is returned when upgrade cannot be performed.
 	ErrNotUpgradable = errors.New(
