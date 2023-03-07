@@ -23,7 +23,6 @@ require (
 	github.com/elastic/go-ucfg v0.8.6
 	github.com/gofrs/flock v0.8.1
 	github.com/gofrs/uuid v4.2.0+incompatible
-	github.com/golang/mock v1.6.0
 	github.com/google/go-cmp v0.5.6
 	github.com/gorilla/mux v1.8.0
 	github.com/hashicorp/go-multierror v1.1.1

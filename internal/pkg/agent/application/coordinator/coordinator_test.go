@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	mock "github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v2"
 
@@ -33,9 +33,11 @@ import (
 	"github.com/elastic/elastic-agent/pkg/core/logger"
 )
 
-//go:generate mockgen -source=coordinator.go -package coordinator -destination mocks_test.go
-//go:generate mockgen -source ../../../capabilities/capabilities.go -package coordinator -destination mocks_cap_test.go
-//go:generate mockgen -source ../../../core/composable/providers.go -package coordinator -destination mocks_var_providers_test.go
+// Refer to https://vektra.github.io/mockery/installation/ to check how to install mockery binary
+//go:generate mockery --all
+//FIXME the 2 mockery commands below generate mocks with the original package name even if --outpkg is specified
+//go:generate mockery --keeptree --output . --outpkg coordinator --dir ../../../capabilities/ --name Capability
+//go:generate mockery --keeptree --output . --outpkg coordinator --dir ../../../core/composable/ --name FetchContextProvider
 
 var expectedDiagnosticHooks map[string]string = map[string]string{
 	"pre-config":      "pre-config.yaml",
@@ -54,8 +56,8 @@ func TestCoordinatorDiagnosticHooks(t *testing.T) {
 	//return type on the coordinator side or the returned struct should be plain data object with all the fields
 	//accessible by anyone
 	subscriptionAll := new(runtime.SubscriptionAll)
-	helper.runtimeManager.EXPECT().SubscribeAll(gomock.Any()).Return(subscriptionAll).AnyTimes()
-	helper.runtimeManager.EXPECT().Update(gomock.Any()).Return(nil)
+	helper.runtimeManager.EXPECT().SubscribeAll(mock.Anything).Return(subscriptionAll)
+	helper.runtimeManager.EXPECT().Update(mock.AnythingOfType("[]component.Component")).Return(nil)
 	helper.runtimeManager.EXPECT().State().Return([]runtime.ComponentComponentState{
 		{
 			Component: component.Component{
@@ -79,21 +81,23 @@ func TestCoordinatorDiagnosticHooks(t *testing.T) {
 				},
 			},
 		},
-	}).AnyTimes()
+	})
 
 	sut := helper.coordinator
 
 	ctx, cancelFunc := context.WithCancel(context.Background())
 
-	wg := new(sync.WaitGroup)
+	coordinatorWg := new(sync.WaitGroup)
 	defer func() {
 		cancelFunc()
-		wg.Wait()
+		// wait till the coordinator exits to avoid a panic
+		// when logging after the test goroutine exited
+		coordinatorWg.Wait()
 	}()
 
-	wg.Add(1)
+	coordinatorWg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer coordinatorWg.Done()
 		coordErr := sut.Run(ctx)
 		assert.ErrorIs(t, coordErr, context.Canceled, "Coordinator exited with unexpected error")
 	}()
@@ -106,7 +110,7 @@ func TestCoordinatorDiagnosticHooks(t *testing.T) {
 			},
 		},
 	}
-	fetchContextProvider := NewMockFetchContextProvider(helper.mockCtrl)
+	fetchContextProvider := NewFetchContextProvider(t)
 	fetchContextProviders := mapstr.M{
 		"kubernetes_secrets": fetchContextProvider,
 	}
@@ -143,9 +147,9 @@ func TestCoordinatorDiagnosticHooks(t *testing.T) {
 
 	initialConf := config.MustNewConfigFrom(configBytes)
 
-	initialConfChange := NewMockConfigChange(helper.mockCtrl)
-	initialConfChange.EXPECT().Config().Return(initialConf).AnyTimes()
-	initialConfChange.EXPECT().Ack().Times(1)
+	initialConfChange := NewMockConfigChange(t)
+	initialConfChange.EXPECT().Config().Return(initialConf)
+	initialConfChange.EXPECT().Ack().Return(nil).Times(1)
 
 	select {
 	case helper.configChangeChannel <- initialConfChange:
@@ -256,71 +260,67 @@ type coordinatorTestHelper struct {
 	varsChannel      chan []*transpiler.Vars
 	varsErrorChannel chan error
 
-	capability     *MockCapability
+	capability     *Capability
 	upgradeManager *MockUpgradeManager
 	reExecManager  *MockReExecManager
 	monitorManager *MockMonitorManager
-	mockCtrl       *gomock.Controller
 }
 
 func newCoordinatorTestHelper(t *testing.T, agentInfo *info.AgentInfo, specs component.RuntimeSpecs, isManaged bool) *coordinatorTestHelper {
 
 	helper := new(coordinatorTestHelper)
 
-	mockCtrl := gomock.NewController(t)
-	helper.mockCtrl = mockCtrl
-
 	// Runtime manager basic wiring
-	mockRuntimeMgr := NewMockRuntimeManager(mockCtrl)
+	mockRuntimeMgr := NewMockRuntimeManager(t)
 	runtimeErrChan := make(chan error)
-	mockRuntimeMgr.EXPECT().Errors().Return(runtimeErrChan).AnyTimes()
-	mockRuntimeMgr.EXPECT().Run(gomock.Any()).DoAndReturn(func(_ctx context.Context) error { <-_ctx.Done(); return _ctx.Err() }).Times(1)
+	mockRuntimeMgr.EXPECT().Errors().Return(runtimeErrChan)
+	mockRuntimeMgr.EXPECT().Run(mock.Anything).RunAndReturn(func(_ctx context.Context) error { <-_ctx.Done(); return _ctx.Err() }).Times(1)
 	helper.runtimeManager = mockRuntimeMgr
 	helper.runtimeErrorChannel = runtimeErrChan
 
 	// Config manager basic wiring
-	mockConfigMgr := NewMockConfigManager(mockCtrl)
+	mockConfigMgr := NewMockConfigManager(t)
 	configErrChan := make(chan error)
-	mockConfigMgr.EXPECT().Errors().Return(configErrChan).AnyTimes()
+	mockConfigMgr.EXPECT().Errors().Return(configErrChan)
 	actionErrorChan := make(chan error)
-	mockConfigMgr.EXPECT().ActionErrors().Return(actionErrorChan).AnyTimes()
+	mockConfigMgr.EXPECT().ActionErrors().Return(actionErrorChan)
 	configChangeChan := make(chan ConfigChange)
-	mockConfigMgr.EXPECT().Watch().Return(configChangeChan).AnyTimes()
-	mockConfigMgr.EXPECT().Run(gomock.Any()).DoAndReturn(func(_ctx context.Context) error { <-_ctx.Done(); return _ctx.Err() }).Times(1)
+	mockConfigMgr.EXPECT().Watch().Return(configChangeChan)
+	mockConfigMgr.EXPECT().Run(mock.Anything).RunAndReturn(func(_ctx context.Context) error { <-_ctx.Done(); return _ctx.Err() }).Times(1)
 	helper.configManager = mockConfigMgr
 	helper.configErrorChannel = configErrChan
 	helper.actionErrorChannel = actionErrorChan
 	helper.configChangeChannel = configChangeChan
 
 	//Variables manager basic wiring
-	mockVarsMgr := NewMockVarsManager(mockCtrl)
+	mockVarsMgr := NewMockVarsManager(t)
 	varsErrChan := make(chan error)
-	mockVarsMgr.EXPECT().Errors().Return(varsErrChan).AnyTimes()
+	mockVarsMgr.EXPECT().Errors().Return(varsErrChan)
 	varsChan := make(chan []*transpiler.Vars)
-	mockVarsMgr.EXPECT().Watch().Return(varsChan).AnyTimes()
-	mockVarsMgr.EXPECT().Run(gomock.Any()).DoAndReturn(func(_ctx context.Context) error { <-_ctx.Done(); return _ctx.Err() }).Times(1)
+	mockVarsMgr.EXPECT().Watch().Return(varsChan)
+	mockVarsMgr.EXPECT().Run(mock.Anything).RunAndReturn(func(_ctx context.Context) error { <-_ctx.Done(); return _ctx.Err() }).Times(1)
 	helper.varsManager = mockVarsMgr
 	helper.varsChannel = varsChan
 	helper.varsErrorChannel = varsErrChan
 
 	//Capability basic wiring
-	mockCapability := NewMockCapability(mockCtrl)
-	mockCapability.EXPECT().Apply(gomock.Any()).DoAndReturn(func(in any) (interface{}, error) { return in, nil }).AnyTimes()
+	mockCapability := NewCapability(t)
+	mockCapability.EXPECT().Apply(mock.AnythingOfType("*transpiler.AST")).RunAndReturn(func(in interface{}) (interface{}, error) { return in, nil })
 	helper.capability = mockCapability
 
 	// Upgrade manager
-	mockUpgradeMgr := NewMockUpgradeManager(mockCtrl)
-	mockUpgradeMgr.EXPECT().Reload(gomock.Any()).Return(nil).AnyTimes()
+	mockUpgradeMgr := NewMockUpgradeManager(t)
+	mockUpgradeMgr.EXPECT().Reload(mock.AnythingOfType("*config.Config")).Return(nil)
 	// mockUpgradeMgr.EXPECT().Upgradeable().Return(false)
 	helper.upgradeManager = mockUpgradeMgr
 
 	//ReExec manager
-	helper.reExecManager = NewMockReExecManager(mockCtrl)
+	helper.reExecManager = NewMockReExecManager(t)
 
 	//Monitor manager
-	mockMonitorMgr := NewMockMonitorManager(mockCtrl)
-	mockMonitorMgr.EXPECT().Reload(gomock.Any()).Return(nil).AnyTimes()
-	mockMonitorMgr.EXPECT().Enabled().Return(false).AnyTimes()
+	mockMonitorMgr := NewMockMonitorManager(t)
+	mockMonitorMgr.EXPECT().Reload(mock.AnythingOfType("*config.Config")).Return(nil)
+	mockMonitorMgr.EXPECT().Enabled().Return(false)
 	helper.monitorManager = mockMonitorMgr
 
 	loggerCfg := logger.DefaultLoggingConfig()
