@@ -23,6 +23,7 @@ import (
 	"github.com/elastic/elastic-agent-libs/logp"
 	"github.com/elastic/elastic-agent-libs/mapstr"
 	"github.com/elastic/elastic-agent/internal/pkg/agent/application/info"
+	"github.com/elastic/elastic-agent/internal/pkg/agent/control/v2/cproto"
 	"github.com/elastic/elastic-agent/internal/pkg/agent/transpiler"
 	"github.com/elastic/elastic-agent/internal/pkg/config"
 	"github.com/elastic/elastic-agent/internal/pkg/diagnostics"
@@ -93,32 +94,8 @@ func TestCoordinatorDiagnosticHooks(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		coordErr := sut.Run(ctx)
-		t.Logf("coordinator exited with error %v", coordErr)
+		assert.ErrorIs(t, coordErr, context.Canceled, "Coordinator exited with unexpected error")
 	}()
-
-	//FIXME: the coordinator never leaves the STARTING state...
-	// assert.Eventually(t, func() bool { return sut.State(true).State != cproto.State_STARTING }, 1*time.Second, 50*time.Millisecond)
-
-	t.Logf("Agent state: %s", sut.State(true).State)
-
-	// Inject initial configuration - after starting coordinator
-	configBytes, err := os.ReadFile("./testdata/simple_config/elastic-agent.yml")
-	require.NoError(t, err)
-
-	initialConf := config.MustNewConfigFrom(configBytes)
-
-	var configAcked bool
-
-	initialConfChange := NewMockConfigChange(helper.mockCtrl)
-	initialConfChange.EXPECT().Config().Return(initialConf).AnyTimes()
-	initialConfChange.EXPECT().Ack().DoAndReturn(func() error { configAcked = true; return nil }).Times(1)
-
-	select {
-	case helper.configChangeChannel <- initialConfChange:
-		t.Log("Initial config injected")
-	case <-time.NewTimer(100 * time.Millisecond).C:
-		t.Fatalf("Timeout writing initial config")
-	}
 
 	//Provide vars
 	processors := transpiler.Processors{
@@ -159,7 +136,26 @@ func TestCoordinatorDiagnosticHooks(t *testing.T) {
 		t.Fatalf("Timeout writing vars")
 	}
 
-	assert.Eventually(t, func() bool { return configAcked }, 1*time.Second, 50*time.Millisecond, "Initial config was not acked.")
+	// Inject initial configuration - after starting coordinator
+	configBytes, err := os.ReadFile("./testdata/simple_config/elastic-agent.yml")
+	require.NoError(t, err)
+
+	initialConf := config.MustNewConfigFrom(configBytes)
+
+	initialConfChange := NewMockConfigChange(helper.mockCtrl)
+	initialConfChange.EXPECT().Config().Return(initialConf).AnyTimes()
+	initialConfChange.EXPECT().Ack().Times(1)
+
+	select {
+	case helper.configChangeChannel <- initialConfChange:
+		t.Log("Initial config injected")
+	case <-time.NewTimer(100 * time.Millisecond).C:
+		t.Fatalf("Timeout writing initial config")
+	}
+
+	assert.Eventually(t, func() bool { return sut.State(true).State == cproto.State_HEALTHY }, 1*time.Second, 50*time.Millisecond)
+
+	t.Logf("Agent state: %s", sut.State(true).State)
 
 	diagHooks := sut.DiagnosticHooks()
 	t.Logf("Received diagnostics: %+v", diagHooks)
@@ -178,7 +174,7 @@ func TestCoordinatorDiagnosticHooks(t *testing.T) {
 			hookResult := hook.Hook(ctx)
 			stringHookResult := sanitizeHookResult(t, hookResult)
 			// The output of hooks is VERY verbose even for simple configs but useful for debugging
-			t.Logf("Hook %s result: 👇\n------ START ------\n%s\n------ END ------", hook.Name, stringHookResult)
+			t.Logf("Hook %s result: 👇\n--- #--- START ---#\n%s\n--- #--- END ---#", hook.Name, stringHookResult)
 			expectedbytes, err := os.ReadFile(fmt.Sprintf("./testdata/simple_config/expected/%s", hook.Filename))
 			if assert.NoError(t, err) {
 				assert.YAMLEqf(t, string(expectedbytes), stringHookResult, "Unexpected YAML content for file %s", hook.Filename)
