@@ -17,6 +17,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v2"
 
 	"github.com/elastic/elastic-agent-client/v7/pkg/client"
 	"github.com/elastic/elastic-agent-client/v7/pkg/proto"
@@ -172,7 +173,7 @@ func TestCoordinatorDiagnosticHooks(t *testing.T) {
 			hook := hooksMap[hookName]
 			assert.Equal(t, diagFileName, hook.Filename)
 			hookResult := hook.Hook(ctx)
-			stringHookResult := sanitizeHookResult(t, hookResult)
+			stringHookResult := sanitizeHookResult(t, hook.Filename, hook.ContentType, hookResult)
 			// The output of hooks is VERY verbose even for simple configs but useful for debugging
 			t.Logf("Hook %s result: 👇\n--- #--- START ---#\n%s\n--- #--- END ---#", hook.Name, stringHookResult)
 			expectedbytes, err := os.ReadFile(fmt.Sprintf("./testdata/simple_config/expected/%s", hook.Filename))
@@ -183,13 +184,61 @@ func TestCoordinatorDiagnosticHooks(t *testing.T) {
 	}
 }
 
-func sanitizeHookResult(t *testing.T, rawBytes []byte) string {
-	const agentRunDir string = "<AgentRunDir>"
+func sanitizeHookResult(t *testing.T, fileName string, contentType string, rawBytes []byte) (retVal string) {
+	const agentPathPlaceholder string = "<AgentRunDir>"
+	const hostIDPlaceholder string = "<HostID>"
+	const hostKey = "host"
+	const pathKey = "path"
+
+	if contentType == "application/yaml" {
+		yamlContent := map[string]any{}
+		err := yaml.Unmarshal(rawBytes, yamlContent)
+		assert.NoErrorf(t, err, "file %s is invalid YAML", fileName)
+
+		if fileName == "pre-config.yaml" || fileName == "computed-config.yaml" {
+			// get rid of runtime informations, since those depend on the machine where the test is executed, just assert that they exist
+			assert.Containsf(t, yamlContent, "runtime", "No runtime information found in YAML")
+			delete(yamlContent, "runtime")
+
+			//fix id and directories
+			if assert.Containsf(t, yamlContent, hostKey, "config yaml does not contain %s key", hostKey) {
+				hostValue := yamlContent[hostKey]
+				if assert.IsType(t, map[interface{}]interface{}{}, hostValue) {
+					hostMap := hostValue.(map[interface{}]interface{})
+					if assert.Contains(t, hostMap, "id", "host map does not contain id") {
+						t.Logf("Substituting host id %q with %q", hostMap["id"], hostIDPlaceholder)
+						hostMap["id"] = hostIDPlaceholder
+					}
+				}
+			}
+
+			if assert.Containsf(t, yamlContent, pathKey, "config yaml does not contain agent path map") {
+				pathValue := yamlContent[pathKey]
+				if assert.IsType(t, map[interface{}]interface{}{}, pathValue) {
+					pathMap := pathValue.(map[interface{}]interface{})
+					currentDir := pathMap["config"].(string)
+					for _, key := range []string{"config", "data", "home", "logs"} {
+						if assert.Containsf(t, pathMap, key, "path map is missing expected key %q", key) {
+							value := pathMap[key]
+							if assert.IsType(t, "", value) {
+								valueString := value.(string)
+								pathMap[key] = strings.Replace(valueString, currentDir, agentPathPlaceholder, 1)
+							}
+						}
+					}
+				}
+			}
+
+		}
+		sanitizedBytes, err := yaml.Marshal(yamlContent)
+		assert.NoError(t, err)
+		return string(sanitizedBytes)
+	}
 
 	//substitute current running dir with a placeholder
 	testDir := path.Dir(os.Args[0])
-	t.Logf("Replacing test dir %s with %s", testDir, agentRunDir)
-	return strings.ReplaceAll(string(rawBytes), testDir, agentRunDir)
+	t.Logf("Replacing test dir %s with %s", testDir, agentPathPlaceholder)
+	return strings.ReplaceAll(string(rawBytes), testDir, agentPathPlaceholder)
 }
 
 type coordinatorTestHelper struct {

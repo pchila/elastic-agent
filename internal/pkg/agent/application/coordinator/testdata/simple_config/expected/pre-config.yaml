@@ -12,7 +12,7 @@ fleet:
   hosts:
   - https://https://your.fleet.host:443
 host:
-  id: 3d3ecc3f5291f96c0b8642d563bfdc34
+  id: <HostID>
 id: 18922a40-bbf4-11ed-a1b6-1b60471a8e8b
 inputs:
 - data_stream:
@@ -432,13 +432,3 @@ path:
   home: <AgentRunDir>/data/elastic-agent-unknow
   logs: <AgentRunDir>
 revision: 5
-runtime:
-  arch: amd64
-  os: linux
-  osinfo:
-    family: ""
-    major: 22
-    minor: 4
-    patch: 0
-    type: linux
-    version: 22.04 LTS
