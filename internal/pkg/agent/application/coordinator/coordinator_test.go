@@ -323,7 +323,10 @@ func newCoordinatorTestHelper(t *testing.T, agentInfo *info.AgentInfo, specs com
 	mockMonitorMgr.EXPECT().Enabled().Return(false).AnyTimes()
 	helper.monitorManager = mockMonitorMgr
 
-	log, err := logger.New("coordinator-test-harness", false)
+	loggerCfg := logger.DefaultLoggingConfig()
+	loggerCfg.ToStderr = true
+
+	log, err := logger.NewFromConfig("coordinator-test", loggerCfg, false)
 	require.NoError(t, err)
 
 	helper.coordinator = New(
