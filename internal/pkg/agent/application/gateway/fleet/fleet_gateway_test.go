@@ -309,7 +309,7 @@ func TestFleetGateway(t *testing.T) {
 
 	// Test the normal time based execution.
 	t.Run("Periodically communicates with Fleet", func(t *testing.T) {
-		scheduler := scheduler.NewPeriodic(150 * time.Millisecond)
+		scheduler := scheduler.NewJitterTimer(150*time.Millisecond, 50*time.Millisecond)
 		client := newTestingClient(t)
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -360,7 +360,7 @@ func TestFleetGateway(t *testing.T) {
 		// 20mins is the double of the base timeout values for golang test suites.
 		// If we cannot interrupt we will timeout.
 		d := 20 * time.Minute
-		scheduler := scheduler.NewPeriodic(d)
+		scheduler := scheduler.NewJitterTimer(d, 0)
 		client := newTestingClient(t)
 
 		ctx, cancel := context.WithCancel(context.Background())

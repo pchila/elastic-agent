@@ -103,7 +103,7 @@ func New(
 	stateStore stateStore,
 ) (*fleetGateway, error) {
 
-	scheduler := scheduler.NewPeriodicJitter(settings.Duration, settings.Jitter)
+	scheduler := scheduler.NewJitterTimer(settings.Duration, settings.Jitter)
 	clock := new(stdlibClock)
 	return newFleetGatewayWithSchedulerAndClock(
 		log,
@@ -166,7 +166,9 @@ func (f *fleetGateway) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			f.scheduler.Stop()
+			if !f.scheduler.Stop() {
+				<-f.scheduler.WaitTick()
+			}
 			f.log.Info("Fleet gateway stopped")
 			return ctx.Err()
 		case <-f.scheduler.WaitTick():

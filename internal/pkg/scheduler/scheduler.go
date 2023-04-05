@@ -43,14 +43,17 @@ func NewStepper() *Stepper {
 // to better distribute the load on the network and remote endpoint
 type JitterTimer struct {
 	t        *time.Timer
+	duration time.Duration
 	variance time.Duration
 }
 
-// NewPeriodicJitter creates a new PeriodicJitter.
-func NewPeriodicJitter(d, variance time.Duration) *JitterTimer {
+// NewJitterTimer creates a new JitterTimer initially waiting only for variance.
+func NewJitterTimer(d, variance time.Duration) *JitterTimer {
+
 	return &JitterTimer{
 		variance: variance,
-		t:        time.NewTimer(d + randomizeVariance(variance)),
+		duration: d,
+		t:        time.NewTimer(randomizeDuration(d, variance)),
 	}
 }
 
@@ -67,8 +70,21 @@ func (p *JitterTimer) Stop() bool {
 
 // Reset set a new duration and restarts the PeriodicJitter scheduler.
 // This must be called only on already stopped JitterTimers
+func (p *JitterTimer) Restart() {
+	p.t.Reset(randomizeDuration(p.duration, p.variance))
+}
+
+// Reset set a new duration and restarts the PeriodicJitter scheduler.
+// This must be called only on already stopped JitterTimers
 func (p *JitterTimer) Reset(d time.Duration) {
-	p.t.Reset(d + randomizeVariance(p.variance))
+	p.t.Reset(randomizeDuration(d, p.variance))
+}
+
+func randomizeDuration(d time.Duration, v time.Duration) time.Duration {
+	if v <= 0 {
+		return d
+	}
+	return d + randomizeVariance(v)
 }
 
 func randomizeVariance(v time.Duration) time.Duration {

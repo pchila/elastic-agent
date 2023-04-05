@@ -82,7 +82,7 @@ func testPeriodicJitter(t *testing.T) {
 	t.Run("tick then wait", func(t *testing.T) {
 		duration := 1 * time.Second
 		variance := 2 * time.Second
-		scheduler := NewPeriodicJitter(duration, variance)
+		scheduler := NewJitterTimer(duration, variance)
 		defer scheduler.Stop()
 
 		startedAt := time.Now()
