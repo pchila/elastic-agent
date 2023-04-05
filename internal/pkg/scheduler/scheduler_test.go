@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,7 +46,6 @@ func (m *tickRecorder) Stop() {
 
 func TestScheduler(t *testing.T) {
 	t.Run("Step scheduler", testStepScheduler)
-	t.Run("Periodic scheduler", testPeriodic)
 	t.Run("PeriodicJitter scheduler", testPeriodicJitter)
 }
 
@@ -78,43 +78,9 @@ func testStepScheduler(t *testing.T) {
 	})
 }
 
-func testPeriodic(t *testing.T) {
-	t.Run("tick than wait", func(t *testing.T) {
-		duration := 1 * time.Minute
-		scheduler := NewPeriodic(duration)
-		defer scheduler.Stop()
-
-		startedAt := time.Now()
-		recorder := newTickRecorder(scheduler)
-		go recorder.Start()
-		defer recorder.Stop()
-
-		nE := <-recorder.recorder
-
-		require.True(t, nE.at.Sub(startedAt) < duration)
-	})
-
-	t.Run("multiple ticks", func(t *testing.T) {
-		duration := 1 * time.Millisecond
-		scheduler := NewPeriodic(duration)
-		defer scheduler.Stop()
-
-		recorder := newTickRecorder(scheduler)
-		go recorder.Start()
-		defer recorder.Stop()
-
-		nE := <-recorder.recorder
-		require.Equal(t, 1, nE.count)
-		nE = <-recorder.recorder
-		require.Equal(t, 2, nE.count)
-		nE = <-recorder.recorder
-		require.Equal(t, 3, nE.count)
-	})
-}
-
 func testPeriodicJitter(t *testing.T) {
-	t.Run("tick than wait", func(t *testing.T) {
-		duration := 5 * time.Second
+	t.Run("tick then wait", func(t *testing.T) {
+		duration := 1 * time.Second
 		variance := 2 * time.Second
 		scheduler := NewPeriodicJitter(duration, variance)
 		defer scheduler.Stop()
@@ -126,72 +92,17 @@ func testPeriodicJitter(t *testing.T) {
 
 		nE := <-recorder.recorder
 
-		diff := nE.at.Sub(startedAt)
-		require.True(
-			t,
-			diff < duration,
-		)
+		diff1 := nE.at.Sub(startedAt)
+		require.Less(t, diff1, duration+variance)
+		require.GreaterOrEqual(t, diff1, duration)
 
+		scheduler.Reset(duration)
 		startedAt = time.Now()
 		nE = <-recorder.recorder
-		diff = nE.at.Sub(startedAt)
-		require.True(
-			t,
-			diff >= duration,
-		)
-	})
+		diff2 := nE.at.Sub(startedAt)
+		require.Less(t, diff2, duration+variance)
+		require.GreaterOrEqual(t, diff2, duration)
 
-	t.Run("multiple ticks", func(t *testing.T) {
-		duration := 1 * time.Millisecond
-		variance := 100 * time.Millisecond
-		scheduler := NewPeriodicJitter(duration, variance)
-		defer scheduler.Stop()
-
-		recorder := newTickRecorder(scheduler)
-		go recorder.Start()
-		defer recorder.Stop()
-
-		nE := <-recorder.recorder
-		require.Equal(t, 1, nE.count)
-		nE = <-recorder.recorder
-		require.Equal(t, 2, nE.count)
-		nE = <-recorder.recorder
-		require.Equal(t, 3, nE.count)
-	})
-
-	t.Run("unblock on first tick", func(t *testing.T) {
-		duration := 30 * time.Minute
-		variance := 30 * time.Minute
-		scheduler := NewPeriodicJitter(duration, variance)
-
-		go func() {
-			// Not a fan of introducing sync-timing-code but
-			// give us a chance to be waiting.
-			<-time.After(500 * time.Millisecond)
-			scheduler.Stop()
-		}()
-
-		<-scheduler.WaitTick()
-	})
-
-	t.Run("unblock on any tick", func(t *testing.T) {
-		duration := 1 * time.Millisecond
-		variance := 2 * time.Second
-		scheduler := NewPeriodicJitter(duration, variance)
-
-		<-scheduler.WaitTick()
-
-		// Increase time between next tick
-		scheduler.d = 20 * time.Minute
-		scheduler.variance = 20 * time.Minute
-
-		go func() {
-			// Not a fan of introducing sync-timing-code but
-			// give us a chance to be waiting.
-			<-time.After(500 * time.Millisecond)
-			scheduler.Stop()
-		}()
-
-		<-scheduler.WaitTick()
+		assert.NotEqual(t, diff1, diff2)
 	})
 }

@@ -26,7 +26,10 @@ func (s *Stepper) WaitTick() <-chan time.Time {
 }
 
 // Stop is stopping the scheduler, in the case of the Stepper scheduler nothing is done.
-func (s *Stepper) Stop() {}
+func (s *Stepper) Stop() bool { return false }
+
+// Reset is restarting the scheduler with the new duration, in the case of the Stepper scheduler nothing is done.
+func (s *Stepper) Reset(time.Duration) {}
 
 // NewStepper returns a new Stepper scheduler where the tick is manually controlled.
 func NewStepper() *Stepper {
@@ -35,93 +38,40 @@ func NewStepper() *Stepper {
 	}
 }
 
-// Periodic wraps a time.Timer as the scheduler.
-type Periodic struct {
-	Ticker *time.Ticker
-	ran    bool
-}
-
-// NewPeriodic returns a Periodic scheduler that will unblock the WaitTick based on a duration.
-// The timer will do an initial tick, sleep for the defined period and tick again.
-func NewPeriodic(d time.Duration) *Periodic {
-	return &Periodic{Ticker: time.NewTicker(d)}
-}
-
-// WaitTick wait on the duration to be experied to unblock the channel.
-// Note: you should not keep a reference to the channel.
-func (p *Periodic) WaitTick() <-chan time.Time {
-	if p.ran {
-		return p.Ticker.C
-	}
-
-	rC := make(chan time.Time, 1)
-	rC <- time.Now()
-	p.ran = true
-
-	return rC
-}
-
-// Stop stops the internal Ticker.
-// Note this will not close the internal channel is up to the developer to unblock the goroutine
-// using another mechanism.
-func (p *Periodic) Stop() {
-	p.Ticker.Stop()
-}
-
-// PeriodicJitter is as scheduler that will periodically create a timer ticker and sleep, to
-// better distribute the load on the network and remote endpoint the timer will introduce variance
-// on each sleep.
-type PeriodicJitter struct {
-	C        chan time.Time
-	ran      bool
-	d        time.Duration
+// JitterTimer is as scheduler that will periodically create a timer
+// and add some random variance to the duration when created or reset,
+// to better distribute the load on the network and remote endpoint
+type JitterTimer struct {
+	t        *time.Timer
 	variance time.Duration
-	done     chan struct{}
 }
 
 // NewPeriodicJitter creates a new PeriodicJitter.
-func NewPeriodicJitter(d, variance time.Duration) *PeriodicJitter {
-	return &PeriodicJitter{
-		C:        make(chan time.Time, 1),
-		d:        d,
+func NewPeriodicJitter(d, variance time.Duration) *JitterTimer {
+	return &JitterTimer{
 		variance: variance,
-		done:     make(chan struct{}),
+		t:        time.NewTimer(d + randomizeVariance(variance)),
 	}
 }
 
-// WaitTick wait on the duration plus some jitter to unblock the channel.
+// WaitTick returns the channel on which to block on read
 // Note: you should not keep a reference to the channel.
-func (p *PeriodicJitter) WaitTick() <-chan time.Time {
-	if !p.ran {
-		// Sleep for only the variance, this will smooth the initial bootstrap of all the agents.
-		select {
-		case <-time.After(p.delay()):
-			p.C <- time.Now()
-		case <-p.done:
-			p.C <- time.Now()
-			close(p.C)
-		}
-		p.ran = true
-		return p.C
-	}
-
-	select {
-	case <-time.After(p.d + p.delay()):
-		p.C <- time.Now()
-	case <-p.done:
-		p.C <- time.Now()
-		close(p.C)
-	}
-
-	return p.C
+func (p *JitterTimer) WaitTick() <-chan time.Time {
+	return p.t.C
 }
 
 // Stop stops the PeriodicJitter scheduler.
-func (p *PeriodicJitter) Stop() {
-	close(p.done)
+func (p *JitterTimer) Stop() bool {
+	return p.t.Stop()
 }
 
-func (p *PeriodicJitter) delay() time.Duration {
-	t := int64(p.variance)
+// Reset set a new duration and restarts the PeriodicJitter scheduler.
+// This must be called only on already stopped JitterTimers
+func (p *JitterTimer) Reset(d time.Duration) {
+	p.t.Reset(d + randomizeVariance(p.variance))
+}
+
+func randomizeVariance(v time.Duration) time.Duration {
+	t := int64(v)
 	return time.Duration(rand.Int63n(t))
 }

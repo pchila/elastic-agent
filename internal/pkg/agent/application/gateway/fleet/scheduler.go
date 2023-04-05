@@ -6,9 +6,11 @@ package fleet
 
 import "time"
 
-// Scheduler simple interface that encapsulate the scheduling logic, this is useful if you want to
-// test asynchronous code in a synchronous way.
+// Scheduler simple interface that encapsulate the scheduling logic.
+// The interface closely follow time.Timer, since we'll have to start,
+// stop and reset duration
 type Scheduler interface {
+	Reset(time.Duration)
 	WaitTick() <-chan time.Time
-	Stop()
+	Stop() bool
 }
