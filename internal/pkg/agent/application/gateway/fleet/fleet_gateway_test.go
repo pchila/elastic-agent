@@ -130,9 +130,46 @@ func emptyStateFetcher(t *testing.T) *MockStateFetcher {
 	return mockFetcher
 }
 
-func neverDebounce(t *testing.T) debouncerFunc[state.State] {
-	return func(_ context.Context, in <-chan state.State, _ time.Duration) <-chan state.State {
-		return in
+// Fake clock to be used as a wall clock time source for debouncing
+type fakeClock struct {
+	t time.Time
+}
+
+func (fc fakeClock) Now() time.Time {
+	return fc.t
+}
+
+// A debouncer function that never debounces and discards any input
+func neverDebounce(t *testing.T) accumulatorDebouncerFunc[state.State, []TimestampedValue[state.State]] {
+	return func(ctx context.Context, in <-chan state.State, _ time.Duration, _ int) <-chan []TimestampedValue[state.State] {
+		outCh := make(chan []TimestampedValue[state.State])
+
+		go func() {
+			defer close(outCh)
+			select {
+			case <-ctx.Done():
+				return
+			case <-in:
+				// this is where states come to die
+
+				// outCh <- []TimestampedValue[state.State]{
+				// 	{
+				// 		Time:  time.Now(),
+				// 		Value: val,
+				// 	},
+				// }
+				// return
+			}
+		}()
+		return outCh
+	}
+}
+
+// onDemandDebounce returns an accumulatorDebounce function that will end on the debounceEnd and will take the timestamps for events from the wallClock
+func onDemandDebounce(debounceEnd <-chan time.Time, wallClock Clock) accumulatorDebouncerFunc[state.State, []TimestampedValue[state.State]] {
+	noopFunc := func() {}
+	return func(ctx context.Context, in <-chan state.State, _ time.Duration, maxItems int) <-chan []TimestampedValue[state.State] {
+		return accumulatorDebounceWithTimeSources[state.State, []TimestampedValue[state.State]](ctx, in, debounceEnd, noopFunc, wallClock, maxItems)
 	}
 }
 
@@ -147,13 +184,14 @@ func withGateway(agentInfo agentInfo, settings *configuration.FleetGatewaySettin
 
 		stateStore := newStateStore(t, log)
 
-		gateway, err := newFleetGatewayWithSchedulerAndDebouncer(
+		gateway, err := newFleetGatewayWithSchedulerDebouncerAndClock(
 			log,
 			settings,
 			agentInfo,
 			client,
 			scheduler,
 			neverDebounce(t),
+			new(stdlibClock),
 			testCancelTimeout,
 			noop.New(),
 			emptyStateFetcher(t),
@@ -174,13 +212,14 @@ func withGatewayAndLog(agentInfo agentInfo, logIF loggerIF, settings *configurat
 
 		stateStore := newStateStore(t, log)
 
-		gateway, err := newFleetGatewayWithSchedulerAndDebouncer(
+		gateway, err := newFleetGatewayWithSchedulerDebouncerAndClock(
 			logIF,
 			settings,
 			agentInfo,
 			client,
 			scheduler,
 			neverDebounce(t),
+			new(stdlibClock),
 			testCancelTimeout,
 			noop.New(),
 			emptyStateFetcher(t),
@@ -330,13 +369,14 @@ func TestFleetGateway(t *testing.T) {
 		log, _ := logger.New("tst", false)
 		stateStore := newStateStore(t, log)
 
-		gateway, err := newFleetGatewayWithSchedulerAndDebouncer(
+		gateway, err := newFleetGatewayWithSchedulerDebouncerAndClock(
 			log,
 			settings,
 			agentInfo,
 			client,
 			scheduler,
 			neverDebounce(t),
+			new(stdlibClock),
 			testCancelTimeout,
 			noop.New(),
 			emptyStateFetcher(t),
@@ -381,7 +421,7 @@ func TestFleetGateway(t *testing.T) {
 		log, _ := logger.New("tst", false)
 		stateStore := newStateStore(t, log)
 
-		gateway, err := newFleetGatewayWithSchedulerAndDebouncer(
+		gateway, err := newFleetGatewayWithSchedulerDebouncerAndClock(
 			log,
 			&configuration.FleetGatewaySettings{
 				Duration: d,
@@ -391,6 +431,7 @@ func TestFleetGateway(t *testing.T) {
 			client,
 			scheduler,
 			neverDebounce(t),
+			new(stdlibClock),
 			testCancelTimeout,
 			noop.New(),
 			emptyStateFetcher(t),
@@ -464,13 +505,14 @@ func TestFleetGateway(t *testing.T) {
 			return stateUpdateSrc
 		})
 
-		gateway, err := newFleetGatewayWithSchedulerAndDebouncer(
+		gateway, err := newFleetGatewayWithSchedulerDebouncerAndClock(
 			mockLogger,
 			configuration.DefaultFleetGatewaySettings(),
 			agentInfo,
 			longPollClient,
 			scheduler,
 			neverDebounce(t),
+			new(stdlibClock),
 			testCancelTimeout,
 			noop.New(),
 			mockFetcher,
@@ -564,19 +606,15 @@ func TestFleetGateway(t *testing.T) {
 		settings := configuration.DefaultFleetGatewaySettings()
 
 		debounceOver := make(chan time.Time)
-
-		onDemandDebounce := func(ctx context.Context, in <-chan state.State, _ time.Duration) <-chan state.State {
-			noopFunc := func() {}
-			return debounceWithTimeSource(ctx, in, debounceOver, noopFunc)
-		}
-
-		gateway, err := newFleetGatewayWithSchedulerAndDebouncer(
+		fclock := fakeClock{t: time.Now()}
+		gateway, err := newFleetGatewayWithSchedulerDebouncerAndClock(
 			mockLogger,
 			settings,
 			agentInfo,
 			longPollClient,
 			scheduler,
-			onDemandDebounce,
+			onDemandDebounce(debounceOver, fclock),
+			fclock,
 			testCancelTimeout,
 			noop.New(),
 			mockFetcher,
@@ -602,6 +640,9 @@ func TestFleetGateway(t *testing.T) {
 
 		require.Eventually(t, func() bool { return startedCheckins > 0 }, 1*time.Second, 50*time.Millisecond, "could not detect a checkin in progress")
 
+		//move time forward
+		fclock.t = fclock.t.Add(100 * time.Millisecond)
+
 		// inject new state
 		agentRunningState := state.State{
 			State:        agentclient.Healthy,
@@ -614,7 +655,7 @@ func TestFleetGateway(t *testing.T) {
 		// push the new state through the subscription (too soon, this will be saved but previous checkin won't be cancelled)
 		mustWriteToChannelBeforeTimeout(t, agentRunningState, stateCh, 50*time.Millisecond)
 
-		debounceOver <- time.Now()
+		debounceOver <- fclock.t.Add(settings.Debounce)
 
 		/// give some time to cancel the current checkin after the state update
 		assert.Eventually(t, func() bool { return len(reportedAgentStatuses) > 0 }, 10*time.Second, 50*time.Millisecond)
@@ -713,19 +754,16 @@ func TestFleetGateway(t *testing.T) {
 		settings := configuration.DefaultFleetGatewaySettings()
 
 		debounceOver := make(chan time.Time)
+		fclock := fakeClock{t: time.Now()}
 
-		onDemandDebounce := func(ctx context.Context, in <-chan state.State, _ time.Duration) <-chan state.State {
-			noopFunc := func() {}
-			return debounceWithTimeSource(ctx, in, debounceOver, noopFunc)
-		}
-
-		gateway, err := newFleetGatewayWithSchedulerAndDebouncer(
+		gateway, err := newFleetGatewayWithSchedulerDebouncerAndClock(
 			mockLogger,
 			settings,
 			agentInfo,
 			longPollClient,
 			scheduler,
-			onDemandDebounce,
+			onDemandDebounce(debounceOver, fclock),
+			fclock,
 			testCancelTimeout,
 			noop.New(),
 			mockFetcher,
@@ -751,8 +789,13 @@ func TestFleetGateway(t *testing.T) {
 
 		require.Eventually(t, func() bool { return startedCheckins == 1 }, 1*time.Second, 50*time.Millisecond, "could not detect a checkin in progress")
 
+		// advance time
+		fclock.t = fclock.t.Add(settings.Debounce)
 		// signal that debounce time has elapsed
-		debounceOver <- time.Now()
+		debounceOver <- fclock.t
+
+		// advance time
+		fclock.t = fclock.t.Add(1 * time.Second)
 
 		// inject new state
 		agentRunningState := state.State{
@@ -772,6 +815,9 @@ func TestFleetGateway(t *testing.T) {
 		require.Len(t, reportedAgentStatuses, 1)
 		require.ErrorIs(t, reportedAgentStatuses[0].err, context.Canceled)
 
+		// advance time
+		fclock.t = fclock.t.Add(1 * time.Second)
+
 		//inject another new state
 		agentUnhealthyState := state.State{
 			State:        agentclient.Degraded,
@@ -787,8 +833,11 @@ func TestFleetGateway(t *testing.T) {
 		/// give some time to check that the new checkin require the debounce to be relaunched
 		assert.Never(t, func() bool { return len(reportedAgentStatuses) > 1 }, 1*time.Second, 50*time.Millisecond)
 
+		// advance time till the debounce
+		fclock.t = fclock.t.Add(settings.Debounce)
+
 		// signal that the debounce is over
-		debounceOver <- time.Now()
+		debounceOver <- fclock.t
 
 		// require that we started 2 checkins and completed (cancelled) one
 		require.Eventually(t, func() bool { return startedCheckins == 3 }, 1*time.Second, 50*time.Millisecond, "could not detect that the 3rd checkin is in progress")
@@ -882,19 +931,16 @@ func TestFleetGateway(t *testing.T) {
 		settings := configuration.DefaultFleetGatewaySettings()
 
 		debounceOver := make(chan time.Time)
+		fclock := fakeClock{t: time.Now()}
 
-		onDemandDebounce := func(ctx context.Context, in <-chan state.State, _ time.Duration) <-chan state.State {
-			noopFunc := func() {}
-			return debounceWithTimeSource(ctx, in, debounceOver, noopFunc)
-		}
-
-		gateway, err := newFleetGatewayWithSchedulerAndDebouncer(
+		gateway, err := newFleetGatewayWithSchedulerDebouncerAndClock(
 			mockLogger,
 			settings,
 			agentInfo,
 			longPollClient,
 			scheduler,
-			onDemandDebounce,
+			onDemandDebounce(debounceOver, fclock),
+			fclock,
 			testCancelTimeout,
 			noop.New(),
 			mockFetcher,
@@ -920,8 +966,14 @@ func TestFleetGateway(t *testing.T) {
 
 		require.Eventually(t, func() bool { return startedCheckins == 1 }, 1*time.Second, 50*time.Millisecond, "could not detect a checkin in progress")
 
+		// advance time
+		fclock.t = fclock.t.Add(settings.Debounce)
+
 		// signal that debounce time has elapsed
-		debounceOver <- time.Now()
+		debounceOver <- fclock.Now()
+
+		// advance time a bit more
+		fclock.t = fclock.t.Add(1 * time.Second)
 
 		// inject new state
 		agentRunningState := state.State{
@@ -932,7 +984,7 @@ func TestFleetGateway(t *testing.T) {
 			Components:   []runtime.ComponentComponentState{},
 			LogLevel:     logp.InfoLevel,
 		}
-		// push the new state through the subscription (too soon, this will be saved but previous checkin won't be cancelled)
+		// push the new state through the subscription
 		mustWriteToChannelBeforeTimeout(t, agentRunningState, stateCh, 50*time.Millisecond)
 
 		//require that we started 2 checkins and completed 0 (cancel timed out on the first one, but the invocation is still ongoing blocked in the test client)

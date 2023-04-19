@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-type debouncerFunc[T any] func(context.Context, <-chan T, time.Duration) <-chan T
+// type debouncerFunc[T any] func(context.Context, <-chan T, time.Duration) <-chan T
 
-// type accumulatorDebouncerFunc[T any, R any] func(context.Context, <-chan T, time.Duration, int) <-chan R
+type accumulatorDebouncerFunc[T any, R any] func(context.Context, <-chan T, time.Duration, int) <-chan R
 
 func Debounce[T any](ctx context.Context, in <-chan T, minDebounce time.Duration) <-chan T {
 

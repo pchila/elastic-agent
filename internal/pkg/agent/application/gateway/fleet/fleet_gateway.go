@@ -67,7 +67,7 @@ type checkinResult struct {
 }
 
 type needNewCheckinError struct {
-	newState state.State
+	newState *state.State
 }
 
 func (*needNewCheckinError) Error() string {
@@ -84,7 +84,8 @@ type fleetGateway struct {
 	log                loggerIF
 	client             client.Sender
 	scheduler          Scheduler
-	debouncerFunction  debouncerFunc[state.State]
+	debouncerFunction  accumulatorDebouncerFunc[state.State, []TimestampedValue[state.State]]
+	clock              Clock
 	settings           *configuration.FleetGatewaySettings
 	cancelTimeout      time.Duration
 	agentInfo          agentInfo
@@ -109,14 +110,15 @@ func New(
 ) (*fleetGateway, error) {
 
 	scheduler := scheduler.NewPeriodicJitter(settings.Duration, settings.Jitter)
-	debouncerFunction := Debounce[state.State]
-	return newFleetGatewayWithSchedulerAndDebouncer(
+	debouncerFunction := AccumulatorDebounce[state.State, []TimestampedValue[state.State]]
+	return newFleetGatewayWithSchedulerDebouncerAndClock(
 		log,
 		settings,
 		agentInfo,
 		client,
 		scheduler,
 		debouncerFunction,
+		new(stdlibClock),
 		cancelCheckinTimeout,
 		acker,
 		stateFetcher,
@@ -124,13 +126,14 @@ func New(
 	)
 }
 
-func newFleetGatewayWithSchedulerAndDebouncer(
+func newFleetGatewayWithSchedulerDebouncerAndClock(
 	log loggerIF,
 	settings *configuration.FleetGatewaySettings,
 	agentInfo agentInfo,
 	client client.Sender,
 	scheduler Scheduler,
-	df debouncerFunc[state.State],
+	df accumulatorDebouncerFunc[state.State, []TimestampedValue[state.State]],
+	clock Clock,
 	cancelTimeout time.Duration,
 	acker acker.Acker,
 	stateFetcher StateFetcher,
@@ -142,8 +145,9 @@ func newFleetGatewayWithSchedulerAndDebouncer(
 		settings:          settings,
 		agentInfo:         agentInfo,
 		scheduler:         scheduler,
-		cancelTimeout:     cancelTimeout,
 		debouncerFunction: df,
+		clock:             clock,
+		cancelTimeout:     cancelTimeout,
 		acker:             acker,
 		stateFetcher:      stateFetcher,
 		stateStore:        stateStore,
@@ -220,7 +224,7 @@ func (f *fleetGateway) triggerCheckin(ctx context.Context) (*fleetapi.CheckinRes
 			var relaunchCheckinErr *needNewCheckinError
 			if errors.As(checkinResult.err, &relaunchCheckinErr) {
 				// checkin was cancelled because we have an updated state to send to fleet
-				state = relaunchCheckinErr.newState
+				state = *relaunchCheckinErr.newState
 			}
 
 			continue
@@ -252,13 +256,13 @@ func (f *fleetGateway) performCancellableCheckin(ctx context.Context, initialSta
 			return checkinResult{err: ctx.Err()}
 		case checkinResult := <-resCheckinChan:
 			return checkinResult
-		case newState, ok := <-f.debouncerFunction(checkinCtx, stateUpdates, debounceDuration):
+		case newStates, ok := <-f.debouncerFunction(checkinCtx, stateUpdates, debounceDuration, 30):
 			if !ok {
 				// update channel is closed with no value
 				continue
 			}
-
-			if !reflect.DeepEqual(newState, initialState) {
+			newState := denoiseStates(newStates, debounceDuration, f.clock.Now())
+			if newState != nil && !reflect.DeepEqual(*newState, initialState) {
 				f.log.Debugf(
 					"Received updated state (Agent state: %q) when checkin is ongoing past configured debounce. Cancelling previous checkin %q and starting a new one.",
 					newState.State,
@@ -269,11 +273,42 @@ func (f *fleetGateway) performCancellableCheckin(ctx context.Context, initialSta
 				f.cancelCheckin(cancelCheckinTimeoutCtx, checkinID.String(), cancelCheckinCtxFunc, resCheckinChan)
 				return checkinResult{err: &needNewCheckinError{newState: newState}}
 			}
-			// reset the debounce duration to zero to get the next update immediately (we already waited for a debounce duration anyway without cancelling and sending a new state)
-			debounceDuration = 0
+			// reset the debounce duration to 30 seconds to get the next update (we already waited for a full debounce duration anyway without cancelling and sending a new state)
+			debounceDuration = 30 * time.Second
 		}
 	}
 
+}
+
+func denoiseStates(states []TimestampedValue[state.State], observationPeriod time.Duration, now time.Time) *state.State {
+	if len(states) == 0 {
+		return nil
+	}
+
+	if len(states) == 1 {
+		// there's a single state, return it
+		return &states[0].Value
+	}
+
+	refTime := now
+
+	// any state that lasted less than 10% of the observation period is discarded
+	threshold := observationPeriod / 10
+
+	var validState *state.State
+	// start from the last element backwards and return the first state that lasted longer than threshold
+	for i := len(states); i <= 0; i-- {
+		if refTime.Sub(states[i].Time) > threshold {
+			// found a valid state
+			validState = &states[i].Value
+			break
+		}
+
+		// go to the next state with the new reference time
+		refTime = states[i].Time
+	}
+
+	return validState
 }
 
 func (f *fleetGateway) cancelCheckin(ctx context.Context, checkinID string, cancelCheckin context.CancelFunc, resCheckinChan <-chan checkinResult) {
