@@ -17,6 +17,7 @@ import (
 	"github.com/elastic/elastic-agent/internal/pkg/agent/application/monitoring"
 	"github.com/elastic/elastic-agent/internal/pkg/agent/application/paths"
 	"github.com/elastic/elastic-agent/internal/pkg/agent/application/upgrade"
+	"github.com/elastic/elastic-agent/internal/pkg/agent/application/upgrade/migration"
 	"github.com/elastic/elastic-agent/internal/pkg/agent/configuration"
 	"github.com/elastic/elastic-agent/internal/pkg/agent/errors"
 	"github.com/elastic/elastic-agent/internal/pkg/agent/storage"
@@ -59,6 +60,9 @@ func New(
 	log.Info("Determined allowed capabilities")
 
 	pathConfigFile := paths.ConfigFile()
+
+	err = migration.NewManager().RunMigrations(new(upgrade.UpgradeMarkerReadWriter))
+	//TODO handle migration errors
 
 	var rawConfig *config.Config
 	if testingMode {

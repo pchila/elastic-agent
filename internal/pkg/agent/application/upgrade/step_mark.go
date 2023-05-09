@@ -37,6 +37,8 @@ type UpdateMarker struct {
 	// Acked is a flag marking whether or not action was acked
 	Acked  bool                    `json:"acked" yaml:"acked"`
 	Action *fleetapi.ActionUpgrade `json:"action" yaml:"action"`
+	// AppliedMigrations keeps track of which migrations have been applied during upgrade, by ID
+	AppliedMigrations []string `json:"applied_migrations" yaml:"applied_migrations"`
 }
 
 // MarkerActionUpgrade adapter struct compatible with pre 8.3 version of the marker file format
@@ -72,22 +74,24 @@ func convertToActionUpgrade(a *MarkerActionUpgrade) *fleetapi.ActionUpgrade {
 }
 
 type updateMarkerSerializer struct {
-	Hash        string               `yaml:"hash"`
-	UpdatedOn   time.Time            `yaml:"updated_on"`
-	PrevVersion string               `yaml:"prev_version"`
-	PrevHash    string               `yaml:"prev_hash"`
-	Acked       bool                 `yaml:"acked"`
-	Action      *MarkerActionUpgrade `yaml:"action"`
+	Hash              string               `yaml:"hash"`
+	UpdatedOn         time.Time            `yaml:"updated_on"`
+	PrevVersion       string               `yaml:"prev_version"`
+	PrevHash          string               `yaml:"prev_hash"`
+	Acked             bool                 `yaml:"acked"`
+	Action            *MarkerActionUpgrade `yaml:"action"`
+	AppliedMigrations []string             `yaml:"applied_migrations"`
 }
 
 func newMarkerSerializer(m *UpdateMarker) *updateMarkerSerializer {
 	return &updateMarkerSerializer{
-		Hash:        m.Hash,
-		UpdatedOn:   m.UpdatedOn,
-		PrevVersion: m.PrevVersion,
-		PrevHash:    m.PrevHash,
-		Acked:       m.Acked,
-		Action:      convertToMarkerAction(m.Action),
+		Hash:              m.Hash,
+		UpdatedOn:         m.UpdatedOn,
+		PrevVersion:       m.PrevVersion,
+		PrevHash:          m.PrevHash,
+		Acked:             m.Acked,
+		Action:            convertToMarkerAction(m.Action),
+		AppliedMigrations: m.AppliedMigrations,
 	}
 }
 
@@ -189,6 +193,16 @@ func saveMarker(marker *UpdateMarker) error {
 	}
 
 	return ioutil.WriteFile(markerFilePath(), markerBytes, 0600)
+}
+
+type UpgradeMarkerReadWriter struct{}
+
+func (UpgradeMarkerReadWriter) Read() (*UpdateMarker, error) {
+	return LoadMarker()
+}
+
+func (UpgradeMarkerReadWriter) Write(um *UpdateMarker) error {
+	return saveMarker(um)
 }
 
 func markerFilePath() string {
