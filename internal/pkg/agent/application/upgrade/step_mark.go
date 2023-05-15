@@ -37,8 +37,6 @@ type UpdateMarker struct {
 	// Acked is a flag marking whether or not action was acked
 	Acked  bool                    `json:"acked" yaml:"acked"`
 	Action *fleetapi.ActionUpgrade `json:"action" yaml:"action"`
-	// AppliedMigrations keeps track of which migrations have been applied during upgrade, by ID
-	AppliedMigrations []string `json:"applied_migrations" yaml:"applied_migrations"`
 }
 
 // MarkerActionUpgrade adapter struct compatible with pre 8.3 version of the marker file format
@@ -85,13 +83,12 @@ type updateMarkerSerializer struct {
 
 func newMarkerSerializer(m *UpdateMarker) *updateMarkerSerializer {
 	return &updateMarkerSerializer{
-		Hash:              m.Hash,
-		UpdatedOn:         m.UpdatedOn,
-		PrevVersion:       m.PrevVersion,
-		PrevHash:          m.PrevHash,
-		Acked:             m.Acked,
-		Action:            convertToMarkerAction(m.Action),
-		AppliedMigrations: m.AppliedMigrations,
+		Hash:        m.Hash,
+		UpdatedOn:   m.UpdatedOn,
+		PrevVersion: m.PrevVersion,
+		PrevHash:    m.PrevHash,
+		Acked:       m.Acked,
+		Action:      convertToMarkerAction(m.Action),
 	}
 }
 
