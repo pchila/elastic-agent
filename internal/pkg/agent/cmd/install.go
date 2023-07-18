@@ -19,6 +19,7 @@ import (
 	"github.com/elastic/elastic-agent/internal/pkg/agent/install"
 	"github.com/elastic/elastic-agent/internal/pkg/cli"
 	"github.com/elastic/elastic-agent/pkg/utils"
+	"github.com/elastic/elastic-agent/version"
 )
 
 const flagInstallBasePath = "base-path"
@@ -49,7 +50,12 @@ would like the Agent to operate.
 }
 
 func installCmd(streams *cli.IOStreams, cmd *cobra.Command) error {
-	err := validateEnrollFlags(cmd)
+	err := version.InitVersionInformation()
+	if err != nil {
+		// TODO should we block the install if package version file is not found/readable?
+		return err
+	}
+	err = validateEnrollFlags(cmd)
 	if err != nil {
 		return err
 	}

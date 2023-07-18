@@ -193,12 +193,14 @@ func TestZipLogs(t *testing.T) {
 		observed = append(observed, zippedItem{Name: f.Name, IsDir: f.FileInfo().IsDir()})
 	}
 
+	baseAgentLogPath := "logs/elastic-agent-" + version.GetDefaultVersion() + "+unknow/"
+
 	// Verify the results.
 	expected := []zippedItem{
 		{"logs/", true},
-		{"logs/elastic-agent-unknow/", true},
-		{"logs/elastic-agent-unknow/sub-dir/", true},
-		{"logs/elastic-agent-unknow/sub-dir/log.ndjson", false},
+		{baseAgentLogPath, true},
+		{baseAgentLogPath + "sub-dir/", true},
+		{baseAgentLogPath + "sub-dir/log.ndjson", false},
 	}
 	assert.Equal(t, expected, observed)
 }

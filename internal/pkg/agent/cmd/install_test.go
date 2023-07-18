@@ -7,6 +7,7 @@
 package cmd
 
 import (
+	"os"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/elastic/elastic-agent/internal/pkg/agent/application/paths"
 	"github.com/elastic/elastic-agent/internal/pkg/cli"
+	agtversion "github.com/elastic/elastic-agent/version"
 )
 
 func TestInstallPath(t *testing.T) {
@@ -51,11 +53,15 @@ func TestInvalidBasePath(t *testing.T) {
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
+			pkgVersionPath, err := agtversion.GetAgentPackageVersionFilePath()
+			require.NoError(t, err)
+			err = os.WriteFile(pkgVersionPath, []byte(agtversion.GetDefaultVersion()), os.ModePerm&0o777)
+			require.NoError(t, err)
 			streams := cli.NewIOStreams()
 			cmd := cobra.Command{}
 			cmd.Flags().String(flagInstallBasePath, test.basePath, "")
 
-			err := installCmd(streams, &cmd)
+			err = installCmd(streams, &cmd)
 
 			if test.expectedError == "" {
 				require.NoError(t, err)

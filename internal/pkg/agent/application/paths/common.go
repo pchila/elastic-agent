@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/elastic/elastic-agent/internal/pkg/release"
+	"github.com/elastic/elastic-agent/version"
 )
 
 const (
@@ -43,6 +44,8 @@ var (
 )
 
 func init() {
+	// this is needed to correctly initialize paths containing the agent package version
+	version.InitVersionInformation()
 	topPath = initialTop()
 	configPath = topPath
 	logsPath = topPath
@@ -172,7 +175,8 @@ func SetLogs(path string) {
 
 // VersionedHome returns a versioned path based on a TopPath and used commit.
 func VersionedHome(base string) string {
-	return filepath.Join(base, "data", fmt.Sprintf("elastic-agent-%s", release.ShortCommit()))
+	return filepath.Join(base, "data", fmt.Sprintf("elastic-agent-%s+%s", version.GetAgentPackageVersion(), release.ShortCommit()))
+	// return filepath.Join(base, "data", fmt.Sprintf("elastic-agent-%s", release.ShortCommit()))
 }
 
 // Downloads returns the downloads directory for Agent
@@ -222,6 +226,12 @@ func retrieveExecutableDir() string {
 
 // isInsideData returns true when the exePath is inside of the current Agents data path.
 func isInsideData(exeDir string) bool {
+	// Try with the new version and commit (should we use commit or build id?)
+	expectedVersionDir := binaryDir(filepath.Join("data", fmt.Sprintf("elastic-agent-%s+%s", version.GetAgentPackageVersion(), release.ShortCommit())))
+	if strings.HasSuffix(exeDir, expectedVersionDir) {
+		return true
+	}
+	// fallback: try to see if we are executing from the old dir format
 	expectedDir := binaryDir(filepath.Join("data", fmt.Sprintf("elastic-agent-%s", release.ShortCommit())))
 	return strings.HasSuffix(exeDir, expectedDir)
 }
