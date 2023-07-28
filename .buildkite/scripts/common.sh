@@ -58,7 +58,10 @@ mage() {
     fi
     pushd "$WORKSPACE"
     command "mage" "$@"
+    # capture mage return code
+    exit=$?
     popd
+    return $exit
 }
 
 # Wrapper function for executing go
