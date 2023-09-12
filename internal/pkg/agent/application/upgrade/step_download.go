@@ -141,7 +141,7 @@ func newDownloader(version *agtversion.ParsedSemVer, log *logger.Logger, setting
 		return nil, err
 	}
 
-	return composed.NewDownloader(fs.NewDownloader(settings), snapDownloader, httpDownloader), nil
+	return composed.NewDownloader(log, fs.NewDownloader(settings), snapDownloader, httpDownloader), nil
 }
 
 func newVerifier(version *agtversion.ParsedSemVer, log *logger.Logger, settings *artifact.Config) (download.Verifier, error) {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/elastic/elastic-agent/internal/pkg/agent/application/upgrade/artifact"
 	"github.com/elastic/elastic-agent/internal/pkg/agent/application/upgrade/artifact/download"
+	"github.com/elastic/elastic-agent/pkg/core/logger"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -62,7 +63,8 @@ func TestComposed(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		d := NewDownloader(tc.downloaders[0], tc.downloaders[1])
+		testLogger, _ := logger.NewTesting(t.Name())
+		d := NewDownloader(testLogger, tc.downloaders[0], tc.downloaders[1])
 		r, _ := d.Download(context.TODO(), artifact.Artifact{Name: "a"}, "b")
 
 		assert.Equal(t, tc.expectedResult, r == succ)
