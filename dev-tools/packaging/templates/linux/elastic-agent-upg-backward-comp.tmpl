@@ -1,0 +1,24 @@
+#!/bin/sh
+# Fix up the symlink
+
+set -ex
+
+SCRIPT=$(readlink -f "$0")
+# Absolute path this script is in
+SCRIPTPATH=$(dirname "$SCRIPT")
+
+TOP_PATH=${SCRIPTPATH%/data/elastic-agent-{{ commit_short }}}
+
+symlink="$TOP_PATH/elastic-agent"
+
+if test -L "$symlink"; then
+    ln -sfn "$TOP_PATH/data/elastic-agent-{{agent_package_version}}+git-{{ commit_short }}/elastic-agent" "$symlink"
+fi
+
+# Move anything in this directory to the destinantion directory except this script
+find ${SCRIPTPATH} -maxdepth 1 ! -name $(basename $0) ! -wholename "$SCRIPTPATH" -exec mv {} ../elastic-agent-{{agent_package_version}}+git-{{ commit_short }}/ \;
+
+
+#execute the real agent
+${TOP_PATH}/data/elastic-{{agent_package_version}}+git-{{ commit_short }}/elastic-agent $@
+

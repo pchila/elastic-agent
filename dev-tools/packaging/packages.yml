@@ -797,6 +797,10 @@ specs:
             source: data/{{.BeatName}}-{{agent_package_version}}+git-{{ commit_short }}/{{.BeatName}}{{.BinaryExt}}
             symlink: true
             mode: 0755
+          # backward compatibility script located under data/elastic-agent-<sha> that will be called when upgrading from older versions
+          'data/{{.BeatName}}-{{ commit_short }}/{{.BeatName}}{{.BinaryExt}}':
+            template: '{{ elastic_beats_dir }}/dev-tools/packaging/templates/linux/elastic-agent-upg-backward-comp.tmpl'
+            mode: 0755
 
     - os: linux
       types: [deb, rpm]
