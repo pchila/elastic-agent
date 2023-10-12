@@ -175,7 +175,7 @@ func SetLogs(path string) {
 
 // VersionedHome returns a versioned path based on a TopPath and used commit.
 func VersionedHome(base string) string {
-	return filepath.Join(base, "data", fmt.Sprintf("elastic-agent-%s+%s", version.GetAgentPackageVersion(), release.ShortCommit()))
+	return filepath.Join(base, "data", installDirNameWithVersion())
 	// return filepath.Join(base, "data", fmt.Sprintf("elastic-agent-%s", release.ShortCommit()))
 }
 
@@ -227,7 +227,7 @@ func retrieveExecutableDir() string {
 // isInsideData returns true when the exePath is inside of the current Agents data path.
 func isInsideData(exeDir string) bool {
 	// Try with the new version and commit (should we use commit or build id?)
-	expectedVersionDir := binaryDir(filepath.Join("data", fmt.Sprintf("elastic-agent-%s+%s", version.GetAgentPackageVersion(), release.ShortCommit())))
+	expectedVersionDir := binaryDir(filepath.Join("data", installDirNameWithVersion()))
 	if strings.HasSuffix(exeDir, expectedVersionDir) {
 		return true
 	}
@@ -275,4 +275,10 @@ func InstallPath(basePath string) string {
 // This always points to the symlink that points to the latest Elastic Agent version.
 func TopBinaryPath() string {
 	return filepath.Join(Top(), BinaryName)
+}
+
+// installDirNameWithVersion returns the expected install directory name that includes the version of the current agent
+// expected format is "elastic-agent-<agent package version>+git-<git commit hash from which the agent binary has been built>"
+func installDirNameWithVersion() string {
+	return fmt.Sprintf("elastic-agent-%s+git-%s", version.GetAgentPackageVersion(), release.ShortCommit())
 }
