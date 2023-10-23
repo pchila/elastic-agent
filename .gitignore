@@ -51,6 +51,9 @@ fleet.enc.lock
 # agent
 build/
 elastic-agent
+# add exceptions for cli directory
+!cmd/elastic-agent
+!cmd/elastic-agent/*
 elastic-agent.dev.yml
 elastic-agent.yml.*
 fleet.yml

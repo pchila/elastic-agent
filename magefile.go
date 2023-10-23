@@ -237,20 +237,35 @@ func (Build) BinaryOSS() error {
 	return devtools.Build(buildArgs)
 }
 
-// Binary build the fleet artifact.
-func (Build) Binary() error {
+func (Build) AgentBinary() error {
 	mg.Deps(Prepare.Env)
 
 	buildArgs := devtools.DefaultBuildArgs()
 	buildArgs.OutputDir = buildDir
 	injectBuildVars(buildArgs.Vars)
-
+	buildArgs.InputFiles = []string{"./cmd/elastic-agent"}
 	return devtools.Build(buildArgs)
 }
 
+func (Build) InstallerBinary() error {
+	mg.Deps(Prepare.Env)
+
+	buildArgs := devtools.DefaultBuildArgs()
+	buildArgs.Name = "elastic-agent-installer"
+	buildArgs.OutputDir = buildDir
+	injectBuildVars(buildArgs.Vars)
+	buildArgs.InputFiles = []string{"./cmd/elastic-agent-installer"}
+	return devtools.Build(buildArgs)
+}
+
+// Binary build the elastic-agent and elastic-agent-installer artifacts.
+func (Build) Binary() {
+	mg.Deps(Build.AgentBinary, Build.InstallerBinary)
+}
+
 // Clean up dev environment.
-func (Build) Clean() {
-	os.RemoveAll(buildDir)
+func (Build) Clean() error {
+	return os.RemoveAll(buildDir)
 }
 
 // TestBinaries build the required binaries for the test suite.
