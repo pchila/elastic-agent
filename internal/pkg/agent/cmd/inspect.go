@@ -30,7 +30,6 @@ import (
 	"github.com/elastic/elastic-agent/internal/pkg/config/operations"
 	"github.com/elastic/elastic-agent/pkg/component"
 	"github.com/elastic/elastic-agent/pkg/core/logger"
-	"github.com/elastic/elastic-agent/pkg/utils"
 )
 
 func newInspectCommandWithArgs(s []string, streams *cli.IOStreams) *cobra.Command {
@@ -109,13 +108,7 @@ variables for the configuration.
 			ctx, cancel := context.WithCancel(context.Background())
 			service.HandleSignals(func() {}, cancel)
 
-			hasRoot, err := utils.HasRoot()
-			if err != nil {
-				fmt.Fprintf(streams.Err, "Error: failed to check for root permissions: %v\n%s\n", err, troubleshootMessage())
-				os.Exit(1)
-			}
-
-			if err := inspectComponents(ctx, paths.ConfigFile(), opts, streams, !hasRoot); err != nil {
+			if err := inspectComponents(ctx, paths.ConfigFile(), opts, streams); err != nil {
 				fmt.Fprintf(streams.Err, "Error: %v\n%s\n", err, troubleshootMessage())
 				os.Exit(1)
 			}
