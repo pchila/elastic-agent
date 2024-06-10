@@ -5,6 +5,7 @@
 package proxytest
 
 import (
+	"bufio"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"strings"
 	"sync"
@@ -38,14 +40,17 @@ type Proxy struct {
 
 type Option func(o *options)
 
+type loggingF func(format string, a ...any)
+
 type options struct {
 	addr        string
 	rewriteHost func(string) string
 	rewriteURL  func(u *url.URL)
 	// logFn if set will be used to log every request.
-	logFn           func(format string, a ...any)
+	logFn           loggingF
 	verbose         bool
 	serverTLSConfig *tls.Config
+	client          *http.Client
 }
 
 // WithAddress will set the address the server will listen on. The format is as
@@ -95,6 +100,12 @@ func WithRewriteFn(f func(u *url.URL)) Option {
 func WithServerTLSConfig(tc *tls.Config) Option {
 	return func(o *options) {
 		o.serverTLSConfig = tc
+	}
+}
+
+func WithHttpClient(hc *http.Client) Option {
+	return func(o *options) {
+		o.client = hc
 	}
 }
 
@@ -183,6 +194,11 @@ func (p *Proxy) StartTLS() error {
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if p.opts.verbose {
+		requestDump, _ := httputil.DumpRequest(r, true)
+		p.opts.logFn("original Request: %s", requestDump)
+	}
+
 	origURL := r.URL.String()
 
 	switch {
@@ -203,9 +219,30 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			r.Method, r.URL.Scheme, r.URL.Host, r.URL.String()))
 	p.proxiedRequestsMu.Unlock()
 
+	if r.Method == http.MethodConnect {
+		p.handleHttps(w, r)
+		return
+	}
+
 	r.RequestURI = ""
 
-	resp, err := http.DefaultClient.Do(r)
+	client := p.opts.client
+	if client == nil {
+		client = http.DefaultClient
+	}
+
+	if p.opts.verbose {
+		requestDump, _ := httputil.DumpRequest(r, true)
+		p.opts.logFn("modified Request: %s", requestDump)
+	}
+
+	modifiedRequest, _ := http.NewRequestWithContext(r.Context(), r.Method, r.URL.String(), r.Body)
+	if p.opts.verbose {
+		requestDump, _ := httputil.DumpRequest(modifiedRequest, true)
+		p.opts.logFn("modified Request #2: %s", requestDump)
+	}
+
+	resp, err := client.Do(modifiedRequest)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		msg := fmt.Sprintf("could not make request: %#v", err.Error())
@@ -225,6 +262,48 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (p *Proxy) handleHttps(w http.ResponseWriter, r *http.Request) {
+	targetSiteCon, err := net.Dial("tcp", r.URL.Host)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		msg := fmt.Sprintf("could not connect to %q: %#v", r.URL.Host, err.Error())
+		log.Print(msg)
+		_, _ = fmt.Fprint(w, msg)
+		return
+	}
+
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		w.WriteHeader(http.StatusInternalServerError)
+		msg := "httpserver does not support hijacking"
+		log.Print(msg)
+		_, _ = fmt.Fprint(w, msg)
+		return
+	}
+
+	proxyClientCon, _, err := hijacker.Hijack()
+	_, err = proxyClientCon.Write([]byte("HTTP/1.0 200 Connection established\r\n\r\n"))
+
+	go func() {
+		defer proxyClientCon.Close()
+		defer targetSiteCon.Close()
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go copyOrWarn(p.opts.logFn, targetSiteCon, proxyClientCon, &wg)
+		go copyOrWarn(p.opts.logFn, proxyClientCon, targetSiteCon, &wg)
+		wg.Wait()
+
+	}()
+}
+
+func copyOrWarn(l loggingF, dst io.Writer, src io.Reader, wg *sync.WaitGroup) {
+	if _, err := io.Copy(dst, src); err != nil {
+		l("Error copying to client: %s", err)
+	}
+	wg.Done()
+}
+
 // ProxiedRequests returns a slice with the "request log" with every request the
 // proxy received.
 func (p *Proxy) ProxiedRequests() []string {
@@ -241,6 +320,10 @@ func (p *Proxy) ProxiedRequests() []string {
 type statusResponseWriter struct {
 	w          http.ResponseWriter
 	statusCode int
+}
+
+func (s *statusResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return s.w.(http.Hijacker).Hijack()
 }
 
 func (s *statusResponseWriter) Header() http.Header {
