@@ -30,6 +30,21 @@ func Test_walkNode(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "easy sequences",
+			args: args{
+				yamlInput: `
+                    - 0
+                    - 1
+                    - 2
+                    - 3
+                    - 5
+                    - 8
+                    - 13
+                    `,
+			},
+			wantErr: false,
+		},
+		{
 			name: "nested mapped struct",
 			args: args{
 				yamlInput: `
