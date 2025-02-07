@@ -82,7 +82,7 @@ func unzip(log *logger.Logger, archivePath, dataDir string, flavor string) (Unpa
 	var hash, rootDir string
 	r, err := zip.OpenReader(archivePath)
 	if err != nil {
-		return UnpackResult{}, err
+		return UnpackResult{}, fmt.Errorf("opening zip reader: %w", err)
 	}
 	defer r.Close()
 
@@ -107,9 +107,13 @@ func unzip(log *logger.Logger, archivePath, dataDir string, flavor string) (Unpa
 		versionedHome = createVersionedHomeFromHash(hash)
 	}
 
-	skipFn, err := skipFnFromZip(log, r, flavor, fileNamePrefix, createVersionedHomeFromHash(hash), registry)
+	if registry == nil {
+		registry = map[string][]string{}
+	}
+
+	skipFn, err := skipFnFromZip(log, r, flavor, fileNamePrefix, versionedHome, registry)
 	if err != nil {
-		return UnpackResult{}, err
+		return UnpackResult{}, fmt.Errorf("invoking skipFnFromZip: %w", err)
 	}
 
 	unpackFile := func(f *zip.File) (err error) {
@@ -224,7 +228,7 @@ func skipFnFromZip(log *logger.Logger, r *zip.ReadCloser, detectedFlavor string,
 		return func(relPath string) bool { return false }, nil
 	}
 
-	flavor, err := install.Flavor(detectedFlavor, "", registry)
+	flavor, err := install.Flavor(detectedFlavor, registry)
 	if err != nil {
 		if errors.Is(err, install.ErrUnknownFlavor) {
 			// unknown flavor fallback to copy all

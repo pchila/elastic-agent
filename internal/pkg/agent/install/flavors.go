@@ -13,7 +13,6 @@ import (
 	"runtime"
 	"strings"
 
-	v1 "github.com/elastic/elastic-agent/pkg/api/v1"
 	"github.com/elastic/elastic-agent/pkg/component"
 )
 
@@ -27,7 +26,10 @@ const (
 
 type SkipFn func(relPath string) bool
 
-var ErrUnknownFlavor = fmt.Errorf("unknown flavor")
+var (
+	ErrUnknownFlavor      = errors.New("unknown flavor")
+	ErrNullFlavorRegistry = errors.New("flavors registry must not be null")
+)
 
 type FlavorDefinition struct {
 	Name       string
@@ -51,18 +53,9 @@ func UsedFlavor(topPath, defaultFlavor string) (string, error) {
 	return string(content), nil
 }
 
-func Flavor(detectedFlavor string, registryPath string, flavorsRegistry map[string][]string) (FlavorDefinition, error) {
+func Flavor(detectedFlavor string, flavorsRegistry map[string][]string) (FlavorDefinition, error) {
 	if flavorsRegistry == nil {
-		f, err := os.Open(registryPath)
-		if err != nil {
-			return FlavorDefinition{}, err
-		}
-		manifest, err := v1.ParseManifest(f)
-		if err != nil {
-			return FlavorDefinition{}, err
-		}
-		defer f.Close()
-		flavorsRegistry = manifest.Package.Flavors
+		return FlavorDefinition{}, ErrNullFlavorRegistry
 	}
 
 	components, found := flavorsRegistry[detectedFlavor]
