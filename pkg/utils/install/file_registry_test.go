@@ -20,7 +20,7 @@ import (
 	v1 "github.com/elastic/elastic-agent/pkg/api/v1"
 )
 
-func TestFileDescriptorSource_AddInstallDesc(t *testing.T) {
+func TestFileInstallRegistry_AddInstallDesc(t *testing.T) {
 	testcases := []struct {
 		name             string
 		setupDir         func(t *testing.T, tmpDir string) string
@@ -173,7 +173,7 @@ func TestFileDescriptorSource_AddInstallDesc(t *testing.T) {
 				installMarkerFile = tc.setupDir(t, tmpDir)
 			}
 
-			src := NewFileDescriptorSource(filepath.Join(tmpDir, installMarkerFile))
+			src := NewFileInstallRegistry(filepath.Join(tmpDir, installMarkerFile))
 
 			installDescriptor, err := src.AddInstallDesc(tc.arg)
 			tc.wantErr(t, err)
@@ -186,7 +186,7 @@ func TestFileDescriptorSource_AddInstallDesc(t *testing.T) {
 	}
 }
 
-func TestFileDescriptorSource_ModifyInstallDesc(t *testing.T) {
+func TestFileInstallRegistry_ModifyInstallDesc(t *testing.T) {
 	// useful variables for testcases
 	aMomentInTime := time.Now()
 	modifierFunctionError := errors.New("whoops! don't trust modifier functions")
@@ -403,7 +403,7 @@ func TestFileDescriptorSource_ModifyInstallDesc(t *testing.T) {
 				installMarkerFile = tc.setupDir(t, tmpDir)
 			}
 
-			src := NewFileDescriptorSource(filepath.Join(tmpDir, installMarkerFile))
+			src := NewFileInstallRegistry(filepath.Join(tmpDir, installMarkerFile))
 
 			installDescriptor, err := src.ModifyInstallDesc(tc.arg)
 			tc.wantErr(t, err)
@@ -416,7 +416,7 @@ func TestFileDescriptorSource_ModifyInstallDesc(t *testing.T) {
 	}
 }
 
-func TestFileDescriptorSource_RemoveAgentInstallDesc(t *testing.T) {
+func TestFileInstallRegistry_RemoveAgentInstallDesc(t *testing.T) {
 	testcases := []struct {
 		name             string
 		setupDir         func(t *testing.T, tmpDir string) string
@@ -611,7 +611,7 @@ func TestFileDescriptorSource_RemoveAgentInstallDesc(t *testing.T) {
 				installMarkerFile = tc.setupDir(t, tmpDir)
 			}
 
-			src := NewFileDescriptorSource(filepath.Join(tmpDir, installMarkerFile))
+			src := NewFileInstallRegistry(filepath.Join(tmpDir, installMarkerFile))
 
 			installDescriptor, err := src.RemoveAgentInstallDesc(tc.arg...)
 			tc.wantErr(t, err)

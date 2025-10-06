@@ -117,6 +117,7 @@ type WatcherHelper interface {
 	TakeOverWatcher(ctx context.Context, log *logger.Logger, topDir string) (*filelock.AppLocker, error)
 }
 
+// installDescriptorSource abstracts away the implementation details of the actual agent install registry.
 type installDescriptorSource interface {
 	AddInstallDesc(desc v1.AgentInstallDesc) (*v1.InstallDescriptor, error)
 	ModifyInstallDesc(modifierFunc func(desc *v1.AgentInstallDesc) error) (*v1.InstallDescriptor, error)

@@ -14,19 +14,21 @@ import (
 	v1 "github.com/elastic/elastic-agent/pkg/api/v1"
 )
 
-type FileDescriptorSource struct {
+type FileInstallRegistry struct {
 	descriptorFile string
 }
 
-func NewFileDescriptorSource(descriptorFile string) *FileDescriptorSource {
-	return &FileDescriptorSource{descriptorFile: descriptorFile}
+func NewFileInstallRegistry(descriptorFile string) *FileInstallRegistry {
+	return &FileInstallRegistry{
+		descriptorFile: descriptorFile,
+	}
 }
 
-func (dp *FileDescriptorSource) GetInstallDesc() (*v1.InstallDescriptor, error) {
+func (dp *FileInstallRegistry) GetInstallDesc() (*v1.InstallDescriptor, error) {
 	return readInstallMarkerFile(dp.descriptorFile)
 }
 
-func (dp *FileDescriptorSource) AddInstallDesc(desc v1.AgentInstallDesc) (*v1.InstallDescriptor, error) {
+func (dp *FileInstallRegistry) AddInstallDesc(desc v1.AgentInstallDesc) (*v1.InstallDescriptor, error) {
 	installDescriptor, err := readInstallMarkerFile(dp.descriptorFile)
 	// not existing or empty files are tolerated, since we would be writing a new descriptor, return any other error
 	if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, io.EOF) {
@@ -53,7 +55,7 @@ func (dp *FileDescriptorSource) AddInstallDesc(desc v1.AgentInstallDesc) (*v1.In
 	return installDescriptor, nil
 }
 
-func (dp *FileDescriptorSource) ModifyInstallDesc(modifierFunc func(desc *v1.AgentInstallDesc) error) (*v1.InstallDescriptor, error) {
+func (dp *FileInstallRegistry) ModifyInstallDesc(modifierFunc func(desc *v1.AgentInstallDesc) error) (*v1.InstallDescriptor, error) {
 	installDescriptor, err := readInstallMarkerFile(dp.descriptorFile)
 	if err != nil {
 		return nil, err
@@ -78,7 +80,7 @@ func (dp *FileDescriptorSource) ModifyInstallDesc(modifierFunc func(desc *v1.Age
 	return installDescriptor, nil
 }
 
-func (dp *FileDescriptorSource) RemoveAgentInstallDesc(versionedHomes ...string) (*v1.InstallDescriptor, error) {
+func (dp *FileInstallRegistry) RemoveAgentInstallDesc(versionedHomes ...string) (*v1.InstallDescriptor, error) {
 	installDescriptor, err := readInstallMarkerFile(dp.descriptorFile)
 	if err != nil {
 		return nil, err
@@ -99,6 +101,9 @@ func (dp *FileDescriptorSource) RemoveAgentInstallDesc(versionedHomes ...string)
 
 	return installDescriptor, nil
 }
+
+// Ensure that FileInstallRegistry implements the Registry interface
+var _ Registry = &FileInstallRegistry{}
 
 func writeInstallMarkerFile(markerFilePath string, descriptor *v1.InstallDescriptor) error {
 	installMarkerFile, err := os.Create(markerFilePath)

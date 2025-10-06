@@ -523,7 +523,7 @@ func hasAllSSDs(block ghw.BlockInfo) bool {
 // and then calls fixInstallMarkerPermissions to set the ownership provided by `ownership`
 func CreateInstallMarker(topPath string, ownership utils.FileOwner, home string, version string, flavor string) error {
 	markerFilePath := filepath.Join(topPath, paths.MarkerFileName)
-	installDescProvider := install.NewFileDescriptorSource(markerFilePath)
+	installDescProvider := install.NewFileInstallRegistry(markerFilePath)
 	installDesc := v1.AgentInstallDesc{Version: version, VersionedHome: home, Flavor: flavor, Active: true}
 	_, err := installDescProvider.AddInstallDesc(installDesc)
 

@@ -144,12 +144,12 @@ func New(
 	// monitoring is not supported in bootstrap mode https://github.com/elastic/elastic-agent/issues/1761
 	isMonitoringSupported := !disableMonitoring && cfg.Settings.V1MonitoringEnabled
 
-	installDescriptorSource := install.NewFileDescriptorSource(filepath.Join(paths.Top(), paths.MarkerFileName))
+	installRegistry := install.NewFileInstallRegistry(filepath.Join(paths.Top(), paths.MarkerFileName))
 	if platform.OS != component.Container {
 		// If we are not running in a container, check and normalize the install descriptor before we start the agent
-		normalizeInstallDescriptorAtStartup(log, paths.Top(), time.Now(), initialUpdateMarker, installDescriptorSource)
+		normalizeInstallRegistryAtStartup(log, paths.Top(), time.Now(), initialUpdateMarker, installRegistry)
 	}
-	upgrader, err := upgrade.NewUpgrader(log, cfg.Settings.DownloadConfig, cfg.Settings.Upgrade, agentInfo, new(upgrade.AgentWatcherHelper), installDescriptorSource)
+	upgrader, err := upgrade.NewUpgrader(log, cfg.Settings.DownloadConfig, cfg.Settings.Upgrade, agentInfo, new(upgrade.AgentWatcherHelper), installRegistry)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to create upgrader: %w", err)
 	}
@@ -300,17 +300,16 @@ func New(
 	return coord, configMgr, varsManager, nil
 }
 
-// normalizeInstallDescriptorAtStartup will check the install descriptor checking:
+// normalizeInstallRegistryAtStartup will check the install descriptor checking:
 // - if we just rolled back: the update marker is checked and in case of rollback we clean up the entry about the failed upgraded install
 // - check all the entries:
 //   - verify that the home directory for that install still exists (remove what does not exist anymore)
-//   - TODO check TTLs of installs to schedule delayed cleanup while the agent is running
 //
 // This function will NOT error out, it will log any errors it encounters as warnings but any error must be treated as non-fatal
-func normalizeInstallDescriptorAtStartup(log *logger.Logger, topDir string, now time.Time, initialUpdateMarker *upgrade.UpdateMarker, installDescriptorSource installDescriptorSource) {
+func normalizeInstallRegistryAtStartup(log *logger.Logger, topDir string, now time.Time, initialUpdateMarker *upgrade.UpdateMarker, installDescriptorSource installDescriptorSource) {
 	// Check if we rolled back and update the install descriptor
 	if initialUpdateMarker != nil && initialUpdateMarker.Details != nil && initialUpdateMarker.Details.State == details.StateRollback {
-		// Take the versionedHome of the version we rolledback from and remove it from the installation lists
+		// Take the versionedHome of the version we rolled back from and remove it from the installation lists
 		_, removeInstallDescErr := installDescriptorSource.RemoveAgentInstallDesc(initialUpdateMarker.VersionedHome /* there should be the versionedHome from the upgrade marker here*/)
 		if removeInstallDescErr != nil {
 			log.Warnf("Error removing rolled back version %s installed in %s: %v", initialUpdateMarker.VersionedHome, initialUpdateMarker.VersionedHome, removeInstallDescErr)
@@ -334,19 +333,39 @@ func normalizeInstallDescriptorAtStartup(log *logger.Logger, topDir string, now 
 		}
 	}
 
+	versionedHomesToCleanup, _, err := checkAgentInstalls(log, topDir, now, installDescriptorSource)
+
+	if err != nil {
+		log.Warnf("Error checking agent installations: %v", err)
+		return
+	}
+
+	if len(versionedHomesToCleanup) > 0 {
+		log.Infof("removing install descriptor for %v", versionedHomesToCleanup)
+		_, err = installDescriptorSource.RemoveAgentInstallDesc(versionedHomesToCleanup...)
+		if err != nil {
+			log.Warnf("Error removing install descriptor for %v: %v", versionedHomesToCleanup, err)
+		}
+	}
+}
+
+// checkAgentInstalls checks all elastic-agent installs returned by installDescriptorSource, will remove expired installs from disk and returns:
+// - versions should be cleaned up from the install registry
+// - when the next install will expire with nextTTL (it may be nil if no install will expire in the future)
+// - blocking errors that prevented running the check
+func checkAgentInstalls(log *logger.Logger, topDir string, now time.Time, installDescriptorSource installDescriptorSource) (versionedHomesToCleanup []string, nextTTL *time.Time, err error) {
+
 	// check that all listed installs are valid
 	installDescriptor, err := installDescriptorSource.GetInstallDesc()
 	if err != nil {
-		log.Warnf("Error getting install descriptor from installDescriptorSource during startup check: %s", err)
-		return
+		return nil, nil, fmt.Errorf("getting install descriptor from installDescriptorSource during startup check: %w", err)
 	}
 
 	if installDescriptor == nil {
 		log.Warnf("Got a nil install descriptor from installDescriptorSource during startup check, skipping")
-		return
+		return nil, nil, nil
 	}
 
-	versionedHomesToCleanup := []string{}
 	for _, installDesc := range installDescriptor.AgentInstalls {
 
 		if installDesc.Active || filepath.Join(topDir, installDesc.VersionedHome) == paths.HomeFrom(topDir) {
@@ -367,25 +386,25 @@ func normalizeInstallDescriptorAtStartup(log *logger.Logger, topDir string, now 
 			continue
 		}
 
-		if installDesc.TTL != nil && now.After(*installDesc.TTL) {
-			// the install directory exists but it's expired. Remove the files and add the versioned home to the entries to remove on the install descriptor
-			log.Infof("agent install descriptor %+v is expired, removing directory %q", installDesc, versionedHomeAbsPath)
-			if cleanupErr := installpkg.RemoveBut(versionedHomeAbsPath, true); cleanupErr != nil {
-				log.Warnf("Error removing directory %q: %s", versionedHomeAbsPath, cleanupErr)
+		if installDesc.TTL != nil {
+			if now.After(*installDesc.TTL) {
+				// the install directory exists but it's expired. Remove the files and add the versioned home to the entries to remove on the install descriptor
+				log.Infof("agent install descriptor %+v is expired, removing directory %q", installDesc, versionedHomeAbsPath)
+				if cleanupErr := installpkg.RemoveBut(versionedHomeAbsPath, true); cleanupErr != nil {
+					log.Warnf("Error removing directory %q: %s", versionedHomeAbsPath, cleanupErr)
+				} else {
+					log.Infof("Directory %q was removed, selecting agent install %+v for removal from the install descriptor", versionedHomeAbsPath, installDesc)
+					versionedHomesToCleanup = append(versionedHomesToCleanup, installDesc.VersionedHome)
+				}
 			} else {
-				log.Infof("Directory %q was removed, selecting agent install %+v for removal from the install descriptor", versionedHomeAbsPath, installDesc)
-				versionedHomesToCleanup = append(versionedHomesToCleanup, installDesc.VersionedHome)
+				// there's a TTL in the future
+				if nextTTL == nil || (*nextTTL).After(*installDesc.TTL) {
+					nextTTL = installDesc.TTL
+				}
 			}
 		}
 	}
-
-	if len(versionedHomesToCleanup) > 0 {
-		log.Infof("removing install descriptor for %v", versionedHomesToCleanup)
-		_, err = installDescriptorSource.RemoveAgentInstallDesc(versionedHomesToCleanup...)
-		if err != nil {
-			log.Warnf("Error removing install descriptor for %v: %v", versionedHomesToCleanup, err)
-		}
-	}
+	return versionedHomesToCleanup, nextTTL, nil
 }
 
 func mergeFleetConfig(ctx context.Context, rawConfig *config.Config) (storage.Store, *configuration.Configuration, error) {

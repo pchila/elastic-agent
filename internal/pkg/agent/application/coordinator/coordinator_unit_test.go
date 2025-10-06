@@ -469,7 +469,7 @@ func TestCoordinatorReportsInvalidPolicy(t *testing.T) {
 	}()
 
 	tmpDir := t.TempDir()
-	upgradeMgr, err := upgrade.NewUpgrader(log, &artifact.Config{}, nil, &info.AgentInfo{}, new(upgrade.AgentWatcherHelper), install.NewFileDescriptorSource(filepath.Join(tmpDir, paths.MarkerFileName)))
+	upgradeMgr, err := upgrade.NewUpgrader(log, &artifact.Config{}, nil, &info.AgentInfo{}, new(upgrade.AgentWatcherHelper), install.NewFileInstallRegistry(filepath.Join(tmpDir, paths.MarkerFileName)))
 	require.NoError(t, err, "errored when creating a new upgrader")
 
 	// Channels have buffer length 1, so we don't have to run on multiple
